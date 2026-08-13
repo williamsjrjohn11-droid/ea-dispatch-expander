@@ -598,6 +598,13 @@ function escapeHtml(s){
   return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function formatPhone(raw){
+  let digits = (raw || '').replace(/\D/g, '');
+  if (digits.length === 11 && digits[0] === '1') digits = digits.slice(1);
+  if (digits.length !== 10) return raw; // not a standard 10-digit US number — show as-typed
+  return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`;
+}
+
 function renderDriverAssignment(){
   const list = document.getElementById('driverAssignList');
   if (!list) return;
@@ -614,7 +621,7 @@ function renderDriverAssignment(){
         <div class="driver-name">${escapeHtml(d.name)}</div>
         ${d.truck_number ? `<div class="driver-phone">${escapeHtml(d.truck_number)}</div>` : ''}
         <div class="driver-phone-edit" onclick="editPhone('${escapeHtml(d.name).replace(/'/g,"\\'")}', '${escapeHtml(d.phone || '')}')">
-          ${d.phone ? escapeHtml(d.phone) + ' · edit' : '+ add phone'}
+          ${d.phone ? escapeHtml(formatPhone(d.phone)) + ' · edit' : '+ add phone'}
         </div>
       </div>
       <input type="number" min="0" class="qty-input" value="${assignments[d.name] || ''}"

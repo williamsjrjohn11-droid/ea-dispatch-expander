@@ -30,7 +30,7 @@
     padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
             calc(40px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
   }
-  .wrap{max-width:640px; margin:0 auto;}
+  .wrap{max-width:640px; margin:0 auto; overflow-x:hidden;}
   .brandbar{display:flex; align-items:center; gap:10px; margin-bottom:18px;}
   .brandbar img{width:56px; height:56px; object-fit:contain; flex-shrink:0;}
   header{margin-bottom:0;}
@@ -79,7 +79,8 @@
 
   .output-panel{border-color:var(--green);}
   #output{
-    white-space:pre-wrap; font-family:var(--mono); font-size:14px; line-height:1.55;
+    white-space:pre-wrap; word-break:break-word; overflow-wrap:break-word;
+    font-family:var(--mono); font-size:14px; line-height:1.55;
     background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px;
     min-height:160px;
   }
@@ -120,7 +121,8 @@
   .driver-msg-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
   .driver-msg-head .driver-name{font-size:14px;}
   .driver-msg-body{
-    white-space:pre-wrap; font-family:var(--mono); font-size:13px; line-height:1.5; color:var(--text-dim); margin-bottom:8px;
+    white-space:pre-wrap; word-break:break-word; overflow-wrap:break-word;
+    font-family:var(--mono); font-size:13px; line-height:1.5; color:var(--text-dim); margin-bottom:8px;
   }
   .driver-msg-actions{display:flex; gap:8px;}
   .driver-msg-actions button{width:auto; margin:0; padding:9px 14px; font-size:13px; flex:1;}
@@ -519,7 +521,7 @@ function renderOutput(){
   }
   lines.push('');
   if(f.deliveryStation || f.deliveryAddress){
-    lines.push(`Delivery - ${f.deliveryStation}${f.deliveryAddress ? '—' + f.deliveryAddress : ''}`);
+    lines.push(`Delivery - ${f.deliveryStation}${f.deliveryAddress ? ' — ' + f.deliveryAddress : ''}`);
   }
   lines.push('');
   if(f.siteOpens) lines.push(f.siteOpens);
@@ -730,7 +732,7 @@ function renderDriverMessages(){
     }
     lines.push('');
     if(f.deliveryStation || f.deliveryAddress){
-      lines.push(`Delivery - ${f.deliveryStation}${f.deliveryAddress ? '—' + f.deliveryAddress : ''}`);
+      lines.push(`Delivery - ${f.deliveryStation}${f.deliveryAddress ? ' — ' + f.deliveryAddress : ''}`);
     }
     lines.push('');
     if(f.siteOpens) lines.push(f.siteOpens);

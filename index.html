@@ -156,6 +156,41 @@
     background:var(--panel2); border:1px solid var(--border2); border-radius:8px; color:var(--text);
     font-family:var(--mono); font-size:14px; padding:9px 10px; width:100%;
   }
+
+  /* Top nav links + address book + help */
+  .top-links{display:flex; gap:10px; margin:-8px 0 16px;}
+  .top-link-btn{
+    width:auto; margin:0; padding:8px 14px; font-size:13px; font-weight:600;
+    background:var(--panel2); color:var(--text-dim); border:1px solid var(--border2);
+  }
+  .modal-overlay{
+    display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:100;
+    align-items:flex-start; justify-content:center; padding:16px; overflow-y:auto;
+  }
+  .modal-overlay.show{display:flex;}
+  .modal-box{
+    background:var(--panel); border:1px solid var(--border2); border-radius:12px;
+    max-width:600px; width:100%; margin-top:40px; padding:20px; max-height:85vh; overflow-y:auto;
+  }
+  .modal-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;}
+  .modal-head h2{font-size:17px; margin:0; font-weight:600;}
+  .modal-close{width:auto; margin:0; padding:6px 12px; background:var(--panel2); color:var(--text-dim);}
+  .search-input{
+    width:100%; background:var(--panel2); border:1px solid var(--border2); border-radius:8px;
+    color:var(--text); font-size:14px; padding:10px; margin-bottom:12px;
+  }
+  .addr-entry{padding:10px 0; border-bottom:1px solid var(--border);}
+  .addr-entry:last-child{border-bottom:none;}
+  .addr-name{font-size:13px; font-weight:700; color:var(--text);}
+  .addr-line{font-size:12px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;}
+  .help-step{display:flex; gap:12px; padding:10px 0; border-bottom:1px solid var(--border);}
+  .help-step:last-child{border-bottom:none;}
+  .help-num{
+    flex-shrink:0; width:24px; height:24px; border-radius:50%; background:var(--amber-dim); color:var(--amber);
+    font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center;
+  }
+  .help-text{font-size:13px; color:var(--text-dim); line-height:1.5;}
+  .help-text b{color:var(--text); font-weight:600;}
 </style>
 </head>
 <body>
@@ -167,7 +202,64 @@
       <h1>Dispatch Expander</h1>
     </header>
   </div>
-  <p class="sub" style="margin:-10px 0 18px;">Paste the raw Amrize text. It scans your address book and builds the driver-ready dispatch.</p>
+  <p class="sub" style="margin:-10px 0 14px;">Paste the raw Amrize text. It scans your address book and builds the driver-ready dispatch.</p>
+
+  <div class="top-links">
+    <button class="top-link-btn" onclick="openAddressBook()">📖 Address book</button>
+    <button class="top-link-btn" onclick="openHelp()">❓ How to use</button>
+  </div>
+
+  <div class="modal-overlay" id="addressBookModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Address book</h2>
+        <button class="modal-close" onclick="closeModal('addressBookModal')">Close</button>
+      </div>
+      <input type="text" class="search-input" id="addrSearch" placeholder="Search by name or address..." oninput="renderAddressBook()">
+      <div id="addrBookList"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="helpModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>How to use this app</h2>
+        <button class="modal-close" onclick="closeModal('helpModal')">Close</button>
+      </div>
+      <div class="help-step">
+        <div class="help-num">1</div>
+        <div class="help-text"><b>Paste the Amrize text.</b> Copy the dispatch text exactly as Amrize sent it (either the short one-liner or the full structured message) and paste it into the box.</div>
+      </div>
+      <div class="help-step">
+        <div class="help-num">2</div>
+        <div class="help-text"><b>Tap Expand dispatch.</b> The app looks up the pickup and delivery locations in your address book and fills in the full addresses automatically.</div>
+      </div>
+      <div class="help-step">
+        <div class="help-num">3</div>
+        <div class="help-text"><b>Check the fields.</b> If anything shows a "check this" badge, it means the app couldn't confidently match that location — fix it by hand before sending. A green "matched" badge means it came straight from your address book.</div>
+      </div>
+      <div class="help-step">
+        <div class="help-num">4</div>
+        <div class="help-text"><b>Assign loads to drivers.</b> Type how many loads each driver gets. The "Assigned X of Y loads" bar turns green once the numbers match your total dispatch quantity.</div>
+      </div>
+      <div class="help-step">
+        <div class="help-num">5</div>
+        <div class="help-text"><b>Save assignment to LoadTracker.</b> This writes the assignment into a new "Dispatches" tab in your Sheet — it does not touch your Tickets, Drivers, or Settlements tabs.</div>
+      </div>
+      <div class="help-step">
+        <div class="help-num">6</div>
+        <div class="help-text"><b>Send the messages.</b> Scroll to "Messages to send" — each driver gets their own copy-paste ready message with just their load count.</div>
+      </div>
+      <div class="help-step">
+        <div class="help-num">7</div>
+        <div class="help-text"><b>Check completion.</b> Pick a date and tap "Check completion" to see how many of each driver's assigned loads actually show up as hauled in LoadTracker's Tickets tab.</div>
+      </div>
+      <div class="help-step">
+        <div class="help-num">✓</div>
+        <div class="help-text"><b>The green badge</b> at the top of "Assign loads to drivers" means the driver list is live from your Sheet. Amber means it couldn't connect and is showing a saved copy instead.</div>
+      </div>
+    </div>
+  </div>
 
   <div class="panel">
     <label for="raw">Raw Amrize text</label>
@@ -180,7 +272,7 @@ Friday 8/7/26'></textarea>
   <div id="reviewBanner" class="review-banner">Some fields couldn't be matched confidently — check them below before sending.</div>
 
   <div id="fieldsPanel" class="panel" style="display:none;">
-    <label style="margin-bottom:10px;">Parsed fields — edit anything before generating</label>
+    <label style="margin-bottom:10px;">Load details — check these before sending</label>
     <div class="field-grid" id="fieldGrid"></div>
   </div>
 
@@ -218,6 +310,52 @@ Friday 8/7/26'></textarea>
 
 <script>
 const ADDRESS_BOOK = [{"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "MCKINNEY READY MIX PLANT", "Destination Address": "1000 E University Dr, McKinney, TX 75069"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "ROCKWALL READY MIX PLANT", "Destination Address": "2640 State Hwy 276 Rockwall, TX 75087"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "DALLAS READY MIX PLANT", "Destination Address": "10361 Bickham Dr, Dallas, TX 75220"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "WYLIE READY MIX PLANT", "Destination Address": "10709 State Hwy 205 Lavon, TX 75166"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "PORTABLE L READY MIX PLANT", "Destination Address": "6146 BREEZEWAY BLVD, Frisco, TX 75033"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "ROYSE CITY READY MIX PLANT", "Destination Address": "2200 E. County Line Rd Royse City, TX 75819"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "FORNEY READY MIX PLANT", "Destination Address": "14700 W. Hwy 80 Forney, TX 75126"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "PLANO READY MIX PLANT", "Destination Address": "1200 Avenue N, Plano, TX 75074"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "CELINA WEST READY MIX PLANT", "Destination Address": "15411 RILEY RD, Pilot Point, TX 76258"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "MCKINNEY READY MIX PLANT", "Destination Address": "1000 E University Dr, McKinney, TX 75069"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "PLANO READY MIX PLANT", "Destination Address": "1200 Avenue N, Plano, TX 75074"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "ROANOKE READY MIX PLANT", "Destination Address": "1689 North Hwy 377 Roanoke, TX 76262"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "SHERMAN READY MIX PLANT", "Destination Address": "6102 Teresa Dr Sherman, TX 75090"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "MELISSA READY MIX PLANT", "Destination Address": "2525 Throckmorton Rd, Melissa, TX 75454"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "WYLIE READY MIX PLANT", "Destination Address": "10709 State Hwy 205 Lavon, TX 75166"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "DENTON READY MIX PLANT", "Destination Address": "1526 South I35W, Denton, TX 76207"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "LEWISVILLE READY MIX PLANT", "Destination Address": "987 E Main St, Lewisville, TX 75057"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "PORTABLE PLANT L ", "Destination Address": "6146 BREEZEWAY BLVD, Frisco, TX 75033"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "BLUE MOUND READY MIX PLANT", "Destination Address": "800 N.E. Loop 820 Ft. Worth, TX 76106"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "ROCKWALL READY MIX PLANT", "Destination Address": "2640 State Hwy 276 Rockwall, TX 75087"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "PORTABLE PLANT H", "Destination Address": "Frisco Wood Dr & N Riverside Dr, TX, Fort Worth 76244"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "COPPELL READY MIX PLANT", "Destination Address": "1800 Beltline Road E. Coppell, TX 75019"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "FORNEY READY MIX PLANT", "Destination Address": "14700 W. Hwy 80 Forney, TX 75126"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "CELINA WEST READY MIX PLANT", "Destination Address": "15411 RILEY RD, Pilot Point, TX 76258"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "PORTABLE PLANT J", "Destination Address": "2333 OLD ITALY RD, Waxahachie, TX 75165"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "DALLAS READY MIX PLANT", "Destination Address": "10361 Bickham Dr, Dallas, TX 75220"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "PORTABLE PLANT B", "Destination Address": "2801 COUNTY LINE RD, Irving, TX 75261"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "MANSFIELD READY MIX PLANT", "Destination Address": "2538 Chamber St, Venus, TX 76084"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "SOUTH DALLAS READY MIX PLANT", "Destination Address": "2861 S. Beltline Rd Dallas, TX 75253"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "FORNEY READY MIX PLANT", "Destination Address": "14700 W. Hwy 80 Forney, TX 75126"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "DOWNTOWN DALLAS RMX PLANT", "Destination Address": "1005 Forest Ave, Dallas, TX 75215"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "ROCKWALL READY MIX PLANT", "Destination Address": "2640 State Hwy 276 Rockwall, TX 75087"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "ROYSE CITY READY MIX PLANT", "Destination Address": "2200 E. County Line Rd Royse City, TX 75819"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "ALVARADO READY MIX PLANT", "Destination Address": "8820 E. Hwy 67 Alvarado, TX 76009"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "COPPELL READY MIX PLANT", "Destination Address": "1800 Beltline Road E. Coppell, TX 75019"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "LEWISVILLE READY MIX PLANT", "Destination Address": "987 E Main St, Lewisville, TX 75057"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "MELISSA READY MIX PLANT", "Destination Address": "2525 Throckmorton Rd, Melissa, TX 75454"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "MCKINNEY READY MIX PLANT", "Destination Address": "1000 E University Dr, McKinney, TX 75069"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "CELINA WEST READY MIX PLANT", "Destination Address": "15411 RILEY RD, Pilot Point, TX 76258"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "PLANO READY MIX PLANT", "Destination Address": "1200 Avenue N, Plano, TX 75074"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "ROANOKE READY MIX PLANT", "Destination Address": "1689 North Hwy 377 Roanke, TX 76262"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "DENTON READY MIX PLANT", "Destination Address": "1526 South I35W, Denton, TX 76207"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "SHERMAN READY MIX PLANT", "Destination Address": "6102 Teresa Dr Sherman, TX 75090"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "WYLIE READY MIX PLANT", "Destination Address": "10709 State Hwy 205 Lavon, TX 75166"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "BLUE MOUND READY MIX PLANT", "Destination Address": "800 N.E. Loop 820 Ft. Worth, TX 76106"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "FORNEY READY MIX PLANT", "Destination Address": "14700 W. Hwy 80 Forney, TX 75126"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "DOWNTOWN DALLAS READY MIX PLANT", "Destination Address": "1005 Forest Ave, Dallas, TX 75215"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "ROCKWALL READY MIX PLANT", "Destination Address": "2640 State Hwy 276 Rockwall, TX 75087"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "SOUTH DALLAS READY MIX PLANT", "Destination Address": "2861 S. Beltline Rd Dallas, TX 75253"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "WYLIE READY MIX PLANT", "Destination Address": "10709 State Hwy 205 Lavon, TX 75166"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "DALLAS READY MIX PLANT", "Destination Address": "10361 Bickham Dr, Dallas, TX 75220"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "PLANO READY MIX PLANT", "Destination Address": "1200 Avenue N, Plano, TX 75074"}];
+
+// ---------- ADDRESS BOOK VIEWER ----------
+
+function openAddressBook(){
+  document.getElementById('addressBookModal').classList.add('show');
+  renderAddressBook();
+}
+function openHelp(){
+  document.getElementById('helpModal').classList.add('show');
+}
+function closeModal(id){
+  document.getElementById(id).classList.remove('show');
+}
+
+function getUniqueLocations(){
+  const seen = new Map();
+  ADDRESS_BOOK.forEach(row => {
+    const pKey = row['Shipping Station'] + '|' + row['Shipping Address'];
+    if (!seen.has(pKey)) seen.set(pKey, { name: row['Shipping Station'], address: row['Shipping Address'] });
+    const dKey = row['Amrize RMX Plant Name'] + '|' + row['Destination Address'];
+    if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'] });
+  });
+  return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderAddressBook(){
+  const query = (document.getElementById('addrSearch').value || '').toLowerCase().trim();
+  const list = getUniqueLocations().filter(loc =>
+    !query || loc.name.toLowerCase().includes(query) || loc.address.toLowerCase().includes(query)
+  );
+  const container = document.getElementById('addrBookList');
+  if (list.length === 0) {
+    container.innerHTML = '<div class="empty-hint">No matches found.</div>';
+    return;
+  }
+  container.innerHTML = list.map(loc => `
+    <div class="addr-entry">
+      <div class="addr-name">${escapeHtmlSafe(loc.name)}</div>
+      <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
+    </div>
+  `).join('');
+}
+
+function escapeHtmlSafe(s){
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 function normalize(str){
   return (str || '').toUpperCase().replace(/[.,#"'’”″′]/g,'').replace(/\s+/g,' ').trim();
@@ -331,22 +469,22 @@ function renderFields(){
   document.getElementById('reviewBanner').classList.toggle('show', needsReview);
 
   const rows = [
-    ['quantity','Quantity', f.quantity, null],
-    ['product','Product', f.product, null],
-    ['pickupStation','Pickup site', f.pickupStation, f.pickupSource],
+    ['quantity','How many loads', f.quantity, null],
+    ['product','Material', f.product, null],
+    ['pickupStation','Pickup location', f.pickupStation, f.pickupSource],
     ['pickupAddress','Pickup address', f.pickupAddress, f.pickupSource],
-    ['deliveryStation','Delivery site', f.deliveryStation, f.deliverySource],
+    ['deliveryStation','Delivery location', f.deliveryStation, f.deliverySource],
     ['deliveryAddress','Delivery address', f.deliveryAddress, f.deliverySource],
-    ['time','Time', f.time, null],
+    ['time','Start time', f.time, null],
     ['dayName','Day', f.dayName, null],
     ['date','Date', f.date, null]
   ];
 
   grid.innerHTML = rows.map(([key,label,val,source]) => {
     let badge = '';
-    if(source === 'explicit') badge = '<span class="badge badge-text">from text</span>';
-    else if(source === 'book') badge = '<span class="badge badge-book">from address book</span>';
-    else if(source === 'none') badge = '<span class="badge badge-review">not matched</span>';
+    if(source === 'explicit') badge = '<span class="badge badge-text">typed in text</span>';
+    else if(source === 'book') badge = '<span class="badge badge-book">matched</span>';
+    else if(source === 'none') badge = '<span class="badge badge-review">check this</span>';
     const isLow = (key.startsWith('pickup') && f.pickupConfidence < 0.5) || (key.startsWith('delivery') && f.deliveryConfidence < 0.5);
     return `<div class="field">
       <div class="field-label"><span>${label}</span>${badge}</div>

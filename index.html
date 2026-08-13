@@ -26,7 +26,9 @@
   *{box-sizing:border-box;}
   body{
     margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
-    -webkit-font-smoothing:antialiased; padding:16px;
+    -webkit-font-smoothing:antialiased;
+    padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
+            calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
   }
   .wrap{max-width:640px; margin:0 auto;}
   .brandbar{display:flex; align-items:center; gap:10px; margin-bottom:18px;}
@@ -533,10 +535,32 @@ function renderOutput(){
   renderDriverAssignment();
 }
 
+// Copies text to the clipboard. Uses the modern Clipboard API where available
+// (most phones from ~2019 onward), falls back to the old execCommand trick for
+// older browsers so Copy still works instead of silently failing.
+function copyText(text, onDone){
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(onDone).catch(() => copyTextFallback(text, onDone));
+  } else {
+    copyTextFallback(text, onDone);
+  }
+}
+function copyTextFallback(text, onDone){
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta);
+  if (onDone) onDone();
+}
+
 function copyOutput(){
   const text = document.getElementById('output').textContent;
   if(!text || text.includes('Paste a dispatch')) return;
-  navigator.clipboard.writeText(text).then(() => {
+  copyText(text, () => {
     const flag = document.getElementById('copiedFlag');
     flag.classList.add('show');
     setTimeout(() => flag.classList.remove('show'), 1800);
@@ -662,7 +686,7 @@ function setAssignment(driverName, value){
 
 function updateTotals(){
   const total = Object.values(assignments).reduce((a,b) => a+b, 0);
-  const target = parseInt(currentFields?.quantity, 10) || 0;
+  const target = parseInt((currentFields && currentFields.quantity), 10) || 0;
   const bar = document.getElementById('totalsBar');
   if(!bar) return;
   if(target === 0){
@@ -733,7 +757,7 @@ function renderDriverMessages(){
 
 function copyDriverMsg(msgId){
   const text = document.getElementById(msgId).textContent;
-  navigator.clipboard.writeText(text).then(() => {
+  copyText(text, () => {
     const flag = document.getElementById('copiedFlag');
     flag.classList.add('show');
     setTimeout(() => flag.classList.remove('show'), 1800);

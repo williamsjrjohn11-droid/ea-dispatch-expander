@@ -86,6 +86,76 @@
   }
   .copied-flag.show{display:block;}
   .empty-hint{color:var(--text-dim); font-size:13px; text-align:center; padding:20px 0;}
+
+  /* Driver assignment */
+  .driver-row{
+    display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border);
+  }
+  .driver-row:last-child{border-bottom:none;}
+  .driver-info{flex:1; min-width:0;}
+  .driver-name{font-size:14px; font-weight:600; color:var(--text);}
+  .driver-phone{font-size:12px; color:var(--text3); font-family:var(--mono);}
+  .qty-input{
+    width:56px; background:var(--panel2); border:1px solid var(--border2); border-radius:8px;
+    color:var(--text); font-family:var(--mono); font-size:15px; padding:8px 6px; text-align:center;
+  }
+  .driver-remove{
+    width:auto; margin:0; padding:8px 10px; background:transparent; color:var(--red); font-size:13px; font-weight:600;
+  }
+  .totals-bar{
+    display:flex; justify-content:space-between; align-items:center; padding:10px 12px; margin-top:10px;
+    background:var(--panel2); border-radius:8px; font-size:13px; font-weight:600;
+  }
+  .totals-bar.balanced{color:var(--green);}
+  .totals-bar.unbalanced{color:var(--amber);}
+  .add-driver-row{display:flex; gap:8px; margin-top:12px;}
+  .add-driver-row input{flex:1;}
+  .add-driver-row button{width:auto; margin:0; padding:11px 16px; white-space:nowrap;}
+  .driver-msg-card{
+    background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:10px;
+  }
+  .driver-msg-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
+  .driver-msg-head .driver-name{font-size:14px;}
+  .driver-msg-body{
+    white-space:pre-wrap; font-family:var(--mono); font-size:13px; line-height:1.5; color:var(--text-dim); margin-bottom:8px;
+  }
+  .driver-msg-actions{display:flex; gap:8px;}
+  .driver-msg-actions button{width:auto; margin:0; padding:9px 14px; font-size:13px; flex:1;}
+  .btn-text{background:var(--blue); color:#0a1626;}
+  .manage-toggle{
+    background:transparent; color:var(--text3); font-size:12px; font-weight:600; padding:6px 0; width:auto; margin:6px 0 0;
+    text-decoration:underline; text-transform:uppercase; letter-spacing:.03em;
+  }
+
+  /* Bridge sync + completion tracker */
+  .sync-badge{
+    display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:3px 8px;
+    border-radius:100px; text-transform:uppercase; letter-spacing:.03em;
+  }
+  .sync-badge.live{background:var(--green-dim); color:var(--green);}
+  .sync-badge.cached{background:var(--amber-dim); color:var(--amber);}
+  .refresh-btn{width:auto; margin:0; padding:6px 10px; font-size:12px; background:var(--panel2); color:var(--text-dim); border:1px solid var(--border2);}
+  .drivers-header{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;}
+  .save-sheet-btn{background:var(--green); color:#062012;}
+  .save-status{text-align:center; font-size:12px; font-weight:600; margin-top:8px; display:none;}
+  .save-status.show{display:block;}
+  .save-status.ok{color:var(--green);}
+  .save-status.err{color:var(--red);}
+
+  .completion-row{
+    display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border);
+  }
+  .completion-row:last-child{border-bottom:none;}
+  .completion-name{flex:1; font-size:14px; font-weight:600;}
+  .completion-fraction{font-family:var(--mono); font-size:13px; color:var(--text-dim); min-width:52px; text-align:right;}
+  .completion-bar-track{width:70px; height:6px; border-radius:3px; background:var(--panel2); overflow:hidden;}
+  .completion-bar-fill{height:100%; border-radius:3px;}
+  .completion-bar-fill.done{background:var(--green);}
+  .completion-bar-fill.partial{background:var(--amber);}
+  .date-input{
+    background:var(--panel2); border:1px solid var(--border2); border-radius:8px; color:var(--text);
+    font-family:var(--mono); font-size:14px; padding:9px 10px; width:100%;
+  }
 </style>
 </head>
 <body>
@@ -119,6 +189,30 @@ Friday 8/7/26'></textarea>
     <div id="output"><div class="empty-hint">Paste a dispatch above and tap "Expand dispatch"</div></div>
     <button class="btn-secondary" onclick="copyOutput()">Copy to send</button>
     <div class="copied-flag" id="copiedFlag">Copied ✓</div>
+  </div>
+
+  <div class="panel" id="assignPanel" style="display:none;">
+    <div class="drivers-header">
+      <label style="margin-bottom:0;">Assign loads to drivers</label>
+      <span id="syncBadge" class="sync-badge cached">Loading...</span>
+    </div>
+    <div id="driverAssignList"></div>
+    <div class="totals-bar" id="totalsBar"></div>
+    <button class="btn-primary save-sheet-btn" onclick="saveToSheet()">Save assignment to LoadTracker</button>
+    <div class="save-status" id="saveStatus"></div>
+    <button class="refresh-btn" onclick="refreshDrivers()" style="margin-top:10px;">Refresh driver list</button>
+  </div>
+
+  <div id="driverMessagesPanel" class="panel" style="display:none;">
+    <label style="margin-bottom:10px;">Messages to send</label>
+    <div id="driverMessages"></div>
+  </div>
+
+  <div class="panel">
+    <label style="margin-bottom:10px;">Completion tracker</label>
+    <input type="date" class="date-input" id="completionDate">
+    <button class="btn-secondary" onclick="checkCompletion()">Check completion</button>
+    <div id="completionResults" style="margin-top:10px;"></div>
   </div>
 </div>
 
@@ -295,6 +389,9 @@ function renderOutput(){
   document.getElementById('outBadge').innerHTML = needsReview
     ? '<span class="badge badge-review">review before sending</span>'
     : '<span class="badge badge-book">ready</span>';
+
+  document.getElementById('assignPanel').style.display = 'block';
+  renderDriverAssignment();
 }
 
 function copyOutput(){
@@ -305,6 +402,271 @@ function copyOutput(){
     flag.classList.add('show');
     setTimeout(() => flag.classList.remove('show'), 1800);
   });
+}
+
+// ---------- DRIVER ROSTER (live from LoadTracker's Sheet via bridge) ----------
+
+const BRIDGE_URL = 'https://script.google.com/macros/s/AKfycbxpeOh2mtSWkE6jddBPkceI1rJDxqM93kFFescF1HGzI-f5rS21q4CMDDt8mBNqCc9g/exec';
+const DRIVER_CACHE_KEY = 'ea_dispatch_drivers_cache';
+
+let driversCache = [];
+let assignments = {}; // driverName -> quantity assigned
+
+async function fetchBridge(action, params = {}) {
+  const url = new URL(BRIDGE_URL);
+  url.searchParams.set('action', action);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error('Bridge request failed: ' + res.status);
+  const json = await res.json();
+  if (json.error) throw new Error(json.error);
+  return json;
+}
+
+function setSyncBadge(state) {
+  const badge = document.getElementById('syncBadge');
+  if (!badge) return;
+  if (state === 'live') {
+    badge.className = 'sync-badge live';
+    badge.textContent = 'Live from LoadTracker';
+  } else if (state === 'cached') {
+    badge.className = 'sync-badge cached';
+    badge.textContent = 'Offline — showing cached list';
+  } else {
+    badge.className = 'sync-badge cached';
+    badge.textContent = 'Loading...';
+  }
+}
+
+async function refreshDrivers() {
+  setSyncBadge('loading');
+  try {
+    const data = await fetchBridge('getDrivers');
+    driversCache = data.drivers || [];
+    try { localStorage.setItem(DRIVER_CACHE_KEY, JSON.stringify(driversCache)); } catch (e) {}
+    setSyncBadge('live');
+  } catch (err) {
+    try {
+      const cached = localStorage.getItem(DRIVER_CACHE_KEY);
+      driversCache = cached ? JSON.parse(cached) : [];
+    } catch (e) { driversCache = []; }
+    setSyncBadge('cached');
+  }
+  renderDriverAssignment();
+}
+
+function escapeHtml(s){
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderDriverAssignment(){
+  const list = document.getElementById('driverAssignList');
+  if (!list) return;
+
+  if(driversCache.length === 0){
+    list.innerHTML = '<div class="empty-hint">No drivers found. Check that your Drivers tab has ACTIVE drivers, then tap Refresh.</div>';
+    document.getElementById('totalsBar').innerHTML = '';
+    return;
+  }
+
+  list.innerHTML = driversCache.map(d => `
+    <div class="driver-row">
+      <div class="driver-info">
+        <div class="driver-name">${escapeHtml(d.name)}</div>
+        ${d.truck_number ? `<div class="driver-phone">${escapeHtml(d.truck_number)}</div>` : ''}
+      </div>
+      <input type="number" min="0" class="qty-input" value="${assignments[d.name] || ''}"
+        placeholder="0" oninput="setAssignment('${escapeHtml(d.name).replace(/'/g,"\\'")}', this.value)">
+    </div>
+  `).join('');
+
+  updateTotals();
+}
+
+function setAssignment(driverName, value){
+  const n = parseInt(value, 10);
+  if(!value || isNaN(n) || n <= 0){
+    delete assignments[driverName];
+  } else {
+    assignments[driverName] = n;
+  }
+  updateTotals();
+  renderDriverMessages();
+}
+
+function updateTotals(){
+  const total = Object.values(assignments).reduce((a,b) => a+b, 0);
+  const target = parseInt(currentFields?.quantity, 10) || 0;
+  const bar = document.getElementById('totalsBar');
+  if(!bar) return;
+  if(target === 0){
+    bar.className = 'totals-bar';
+    bar.textContent = `Assigned: ${total} loads`;
+  } else if(total === target){
+    bar.className = 'totals-bar balanced';
+    bar.textContent = `✓ Assigned ${total} of ${target} loads`;
+  } else {
+    bar.className = 'totals-bar unbalanced';
+    bar.textContent = `Assigned ${total} of ${target} loads — ${target - total > 0 ? (target-total) + ' left over' : (total-target) + ' over'}`;
+  }
+  renderDriverMessages();
+}
+
+function renderDriverMessages(){
+  const assigned = driversCache.filter(d => assignments[d.name] > 0);
+  const panel = document.getElementById('driverMessagesPanel');
+  const container = document.getElementById('driverMessages');
+
+  if(assigned.length === 0){
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+
+  const f = currentFields;
+  const dateLine = [f.dayName, f.date].filter(Boolean).join(' ');
+
+  container.innerHTML = assigned.map(d => {
+    const qty = assignments[d.name];
+    const lines = [];
+    lines.push('Please acknowledge with a thumbs up 👍');
+    if(dateLine) lines.push(dateLine);
+    lines.push('');
+    lines.push(`Loads - ${qty}`);
+    if(f.product) lines.push(`Product - ${f.product}`);
+    if(f.pickupStation || f.pickupAddress){
+      lines.push(`Pickup - ${f.pickupStation}${f.pickupStation ? ' —' : ''}`);
+      if(f.pickupAddress) lines.push(f.pickupAddress);
+    }
+    lines.push('');
+    if(f.deliveryStation || f.deliveryAddress){
+      lines.push(`Delivery - ${f.deliveryStation}${f.deliveryAddress ? '—' + f.deliveryAddress : ''}`);
+    }
+    lines.push('');
+    if(f.siteOpens) lines.push(f.siteOpens);
+    else if(f.time) lines.push(`Site opens ${f.time}`);
+
+    const msg = lines.join('\n');
+    const msgId = 'msg_' + d.name.replace(/[^a-z0-9]/gi, '_');
+
+    return `
+      <div class="driver-msg-card">
+        <div class="driver-msg-head">
+          <span class="driver-name">${escapeHtml(d.name)} — ${qty} load${qty==1?'':'s'}</span>
+        </div>
+        <div class="driver-msg-body" id="${msgId}">${escapeHtml(msg)}</div>
+        <div class="driver-msg-actions">
+          <button class="btn-secondary" onclick="copyDriverMsg('${msgId}')">Copy</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function copyDriverMsg(msgId){
+  const text = document.getElementById(msgId).textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const flag = document.getElementById('copiedFlag');
+    flag.classList.add('show');
+    setTimeout(() => flag.classList.remove('show'), 1800);
+  });
+}
+
+// ---------- SAVE ASSIGNMENT TO LOADTRACKER SHEET ----------
+
+async function saveToSheet(){
+  const assigned = driversCache.filter(d => assignments[d.name] > 0);
+  const statusEl = document.getElementById('saveStatus');
+  if(assigned.length === 0){
+    statusEl.className = 'save-status show err';
+    statusEl.textContent = 'Assign at least one driver before saving.';
+    return;
+  }
+
+  const f = currentFields;
+  const payload = {
+    date: f.date || '',
+    day_name: f.dayName || '',
+    product: f.product || '',
+    pickup_station: f.pickupStation || '',
+    pickup_address: f.pickupAddress || '',
+    delivery_station: f.deliveryStation || '',
+    delivery_address: f.deliveryAddress || '',
+    time: f.time || '',
+    notes: f.siteOpens || '',
+    total_dispatched_qty: parseInt(f.quantity, 10) || 0,
+    assignments: assigned.map(d => ({ driver: d.name, qty_assigned: assignments[d.name] }))
+  };
+
+  statusEl.className = 'save-status show';
+  statusEl.textContent = 'Saving...';
+
+  try {
+    const result = await fetchBridge('saveAssignments', { payload: JSON.stringify(payload) });
+    statusEl.className = 'save-status show ok';
+    statusEl.textContent = `✓ Saved ${result.rows_written} assignment(s) to LoadTracker`;
+  } catch (err) {
+    statusEl.className = 'save-status show err';
+    statusEl.textContent = 'Could not save — check your connection and try again.';
+  }
+}
+
+// ---------- COMPLETION TRACKER ----------
+
+document.addEventListener('DOMContentLoaded', () => {
+  const dateInput = document.getElementById('completionDate');
+  if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
+  refreshDrivers();
+});
+
+async function checkCompletion(){
+  const date = document.getElementById('completionDate').value;
+  const resultsEl = document.getElementById('completionResults');
+  resultsEl.innerHTML = '<div class="empty-hint">Loading...</div>';
+
+  try {
+    const [completionData, dispatchData] = await Promise.all([
+      fetchBridge('getCompletion', { date }),
+      fetchBridge('getDispatches', { date })
+    ]);
+
+    const completion = completionData.completion || {};
+    const dispatches = dispatchData.dispatches || [];
+
+    // Sum assigned qty per driver for this date
+    const assignedByDriver = {};
+    dispatches.forEach(d => {
+      assignedByDriver[d.driver] = (assignedByDriver[d.driver] || 0) + (parseInt(d.qty_assigned, 10) || 0);
+    });
+
+    const allDrivers = new Set([...Object.keys(assignedByDriver)]);
+    Object.keys(completion).forEach(key => {
+      const [driver, keyDate] = key.split('|');
+      if (keyDate === date) allDrivers.add(driver);
+    });
+
+    if (allDrivers.size === 0) {
+      resultsEl.innerHTML = '<div class="empty-hint">No dispatches or completed loads found for this date.</div>';
+      return;
+    }
+
+    resultsEl.innerHTML = Array.from(allDrivers).map(driver => {
+      const assigned = assignedByDriver[driver] || 0;
+      const completed = completion[driver + '|' + date] || 0;
+      const pct = assigned > 0 ? Math.min(100, Math.round((completed / assigned) * 100)) : (completed > 0 ? 100 : 0);
+      const barClass = pct >= 100 ? 'done' : 'partial';
+      const fraction = assigned > 0 ? `${completed}/${assigned}` : `${completed}/—`;
+      return `
+        <div class="completion-row">
+          <div class="completion-name">${escapeHtml(driver)}</div>
+          <div class="completion-bar-track"><div class="completion-bar-fill ${barClass}" style="width:${pct}%"></div></div>
+          <div class="completion-fraction">${fraction}</div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    resultsEl.innerHTML = '<div class="empty-hint">Could not load completion data — check your connection.</div>';
+  }
 }
 
 // Register service worker for offline/installable support (Android + iOS PWA).

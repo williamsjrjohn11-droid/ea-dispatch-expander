@@ -186,6 +186,14 @@
   .eta-time.ontime{color:var(--green);}
   .plan-loading{text-align:center; color:var(--text-dim); font-size:13px; padding:20px 0;}
 
+  /* Load value estimate */
+  .value-box{
+    background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:14px; margin-top:12px;
+  }
+  .value-row{display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:13px;}
+  .value-row.total{border-top:1px solid var(--border2); margin-top:6px; padding-top:10px; font-size:16px; font-weight:700; color:var(--green);}
+  .value-label{color:var(--text-dim);}
+
   /* Driver report */
   .report-row{display:flex; align-items:center; gap:8px; padding:11px 0; border-bottom:1px solid var(--border);}
   .report-row:last-child{border-bottom:none;}
@@ -375,11 +383,16 @@ Friday 8/7/26'></textarea>
       </div>
     </div>
     <div class="plan-field" style="margin-bottom:12px;">
+      <label>Tons per load (for value estimate)</label>
+      <input type="number" id="tonsPerLoad" value="24" min="0" step="0.5" onchange="updateValueEstimate()">
+    </div>
+    <div class="plan-field" style="margin-bottom:12px;">
       <label>Needs to finish by (optional)</label>
       <input type="time" id="finishByTime">
     </div>
     <button class="btn-secondary" onclick="calculateRoute()">Calculate route &amp; plan</button>
     <div id="planResults" style="margin-top:12px;"></div>
+    <div id="valueEstimateResults"></div>
   </div>
 
   <div id="driverMessagesPanel" class="panel" style="display:none;">
@@ -397,6 +410,7 @@ Friday 8/7/26'></textarea>
 
 <script>
 const ADDRESS_BOOK = [{"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "MCKINNEY READY MIX PLANT", "Destination Address": "1000 E University Dr, McKinney, TX 75069"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "ROCKWALL READY MIX PLANT", "Destination Address": "2640 State Hwy 276 Rockwall, TX 75087"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "DALLAS READY MIX PLANT", "Destination Address": "10361 Bickham Dr, Dallas, TX 75220"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "WYLIE READY MIX PLANT", "Destination Address": "10709 State Hwy 205 Lavon, TX 75166"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "PORTABLE L READY MIX PLANT", "Destination Address": "6146 BREEZEWAY BLVD, Frisco, TX 75033"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "ROYSE CITY READY MIX PLANT", "Destination Address": "2200 E. County Line Rd Royse City, TX 75819"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "FORNEY READY MIX PLANT", "Destination Address": "14700 W. Hwy 80 Forney, TX 75126"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "PLANO READY MIX PLANT", "Destination Address": "1200 Avenue N, Plano, TX 75074"}, {"Shipping Station": "MELISSA YARD CRUSHED STONE", "Shipping Address": "2525 THROCKMORTON RD, MELISSA, TX 75454", "Amrize RMX Plant Name": "CELINA WEST READY MIX PLANT", "Destination Address": "15411 RILEY RD, Pilot Point, TX 76258"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "MCKINNEY READY MIX PLANT", "Destination Address": "1000 E University Dr, McKinney, TX 75069"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "PLANO READY MIX PLANT", "Destination Address": "1200 Avenue N, Plano, TX 75074"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "ROANOKE READY MIX PLANT", "Destination Address": "1689 North Hwy 377 Roanoke, TX 76262"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "SHERMAN READY MIX PLANT", "Destination Address": "6102 Teresa Dr Sherman, TX 75090"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "MELISSA READY MIX PLANT", "Destination Address": "2525 Throckmorton Rd, Melissa, TX 75454"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "WYLIE READY MIX PLANT", "Destination Address": "10709 State Hwy 205 Lavon, TX 75166"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "DENTON READY MIX PLANT", "Destination Address": "1526 South I35W, Denton, TX 76207"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "LEWISVILLE READY MIX PLANT", "Destination Address": "987 E Main St, Lewisville, TX 75057"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "PORTABLE PLANT L ", "Destination Address": "6146 BREEZEWAY BLVD, Frisco, TX 75033"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "BLUE MOUND READY MIX PLANT", "Destination Address": "800 N.E. Loop 820 Ft. Worth, TX 76106"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "ROCKWALL READY MIX PLANT", "Destination Address": "2640 State Hwy 276 Rockwall, TX 75087"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "PORTABLE PLANT H", "Destination Address": "Frisco Wood Dr & N Riverside Dr, TX, Fort Worth 76244"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "COPPELL READY MIX PLANT", "Destination Address": "1800 Beltline Road E. Coppell, TX 75019"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "FORNEY READY MIX PLANT", "Destination Address": "14700 W. Hwy 80 Forney, TX 75126"}, {"Shipping Station": "AMBROSE SAND & GRAVEL", "Shipping Address": "115 AMBROSE ST, BELLS, TX 75414", "Amrize RMX Plant Name": "CELINA WEST READY MIX PLANT", "Destination Address": "15411 RILEY RD, Pilot Point, TX 76258"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "PORTABLE PLANT J", "Destination Address": "2333 OLD ITALY RD, Waxahachie, TX 75165"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "DALLAS READY MIX PLANT", "Destination Address": "10361 Bickham Dr, Dallas, TX 75220"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "PORTABLE PLANT B", "Destination Address": "2801 COUNTY LINE RD, Irving, TX 75261"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "MANSFIELD READY MIX PLANT", "Destination Address": "2538 Chamber St, Venus, TX 76084"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "SOUTH DALLAS READY MIX PLANT", "Destination Address": "2861 S. Beltline Rd Dallas, TX 75253"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "FORNEY READY MIX PLANT", "Destination Address": "14700 W. Hwy 80 Forney, TX 75126"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "DOWNTOWN DALLAS RMX PLANT", "Destination Address": "1005 Forest Ave, Dallas, TX 75215"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "ROCKWALL READY MIX PLANT", "Destination Address": "2640 State Hwy 276 Rockwall, TX 75087"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "ROYSE CITY READY MIX PLANT", "Destination Address": "2200 E. County Line Rd Royse City, TX 75819"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "ALVARADO READY MIX PLANT", "Destination Address": "8820 E. Hwy 67 Alvarado, TX 76009"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "COPPELL READY MIX PLANT", "Destination Address": "1800 Beltline Road E. Coppell, TX 75019"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "LEWISVILLE READY MIX PLANT", "Destination Address": "987 E Main St, Lewisville, TX 75057"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "MELISSA READY MIX PLANT", "Destination Address": "2525 Throckmorton Rd, Melissa, TX 75454"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "MCKINNEY READY MIX PLANT", "Destination Address": "1000 E University Dr, McKinney, TX 75069"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "CELINA WEST READY MIX PLANT", "Destination Address": "15411 RILEY RD, Pilot Point, TX 76258"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "PLANO READY MIX PLANT", "Destination Address": "1200 Avenue N, Plano, TX 75074"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "ROANOKE READY MIX PLANT", "Destination Address": "1689 North Hwy 377 Roanke, TX 76262"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "DENTON READY MIX PLANT", "Destination Address": "1526 South I35W, Denton, TX 76207"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "SHERMAN READY MIX PLANT", "Destination Address": "6102 Teresa Dr Sherman, TX 75090"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "WYLIE READY MIX PLANT", "Destination Address": "10709 State Hwy 205 Lavon, TX 75166"}, {"Shipping Station": "ROSSER SAND & GRAVEL", "Shipping Address": "14242 TX-34 SCURRY, TX 75158", "Amrize RMX Plant Name": "BLUE MOUND READY MIX PLANT", "Destination Address": "800 N.E. Loop 820 Ft. Worth, TX 76106"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "FORNEY READY MIX PLANT", "Destination Address": "14700 W. Hwy 80 Forney, TX 75126"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "DOWNTOWN DALLAS READY MIX PLANT", "Destination Address": "1005 Forest Ave, Dallas, TX 75215"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "ROCKWALL READY MIX PLANT", "Destination Address": "2640 State Hwy 276 Rockwall, TX 75087"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "SOUTH DALLAS READY MIX PLANT", "Destination Address": "2861 S. Beltline Rd Dallas, TX 75253"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "WYLIE READY MIX PLANT", "Destination Address": "10709 State Hwy 205 Lavon, TX 75166"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "DALLAS READY MIX PLANT", "Destination Address": "10361 Bickham Dr, Dallas, TX 75220"}, {"Shipping Station": "ROYSE CITY YARD CRUSHED STONE", "Shipping Address": "2200 EAST COUNTY LINE ROAD, ROYSE CITY, TX 75189", "Amrize RMX Plant Name": "PLANO READY MIX PLANT", "Destination Address": "1200 Avenue N, Plano, TX 75074"}];
+const RATE_TABLE = [{"origin": "Amrize: Ambrose", "plant_code": "P4954", "plant_name": "BLUE MOUND", "rate_per_ton": 20.0}, {"origin": "Amrize: Ambrose", "plant_code": "P4977", "plant_name": "CELINA", "rate_per_ton": 9.5}, {"origin": "Amrize: Ambrose", "plant_code": "P4956", "plant_name": "COPPELL", "rate_per_ton": 10.8}, {"origin": "Amrize: Ambrose", "plant_code": "P4951", "plant_name": "DENTON", "rate_per_ton": 12.0}, {"origin": "Amrize: Ambrose", "plant_code": "P4964", "plant_name": "FORNEY", "rate_per_ton": 12.35}, {"origin": "Amrize: Ambrose", "plant_code": "P4952", "plant_name": "LEWISVILLE", "rate_per_ton": 11.5}, {"origin": "Amrize: Ambrose", "plant_code": "P4958", "plant_name": "MCKINNEY", "rate_per_ton": 7.2}, {"origin": "Amrize: Ambrose", "plant_code": "P4966", "plant_name": "MELISSA", "rate_per_ton": 6.5}, {"origin": "Amrize: Ambrose", "plant_code": "P4950", "plant_name": "PLANO", "rate_per_ton": 9.8}, {"origin": "Amrize: Ambrose", "plant_code": "P4975", "plant_name": "PORTABLE H", "rate_per_ton": 21.0}, {"origin": "Amrize: Ambrose", "plant_code": "P4296", "plant_name": "PORTABLE L", "rate_per_ton": 9.8}, {"origin": "Amrize: Ambrose", "plant_code": "P4961", "plant_name": "ROANOKE", "rate_per_ton": 15.5}, {"origin": "Amrize: Ambrose", "plant_code": "P4959", "plant_name": "ROCKWALL", "rate_per_ton": 10.5}, {"origin": "Amrize: Ambrose", "plant_code": "P4962", "plant_name": "SHERMAN", "rate_per_ton": 4.9}, {"origin": "Amrize: Ambrose", "plant_code": "P4953", "plant_name": "WYLIE", "rate_per_ton": 9.14}, {"origin": "Amrize: Melissa Rail", "plant_code": "P4977", "plant_name": "CELINA", "rate_per_ton": 5.23}, {"origin": "Amrize: Melissa Rail", "plant_code": "P4955", "plant_name": "DALLAS", "rate_per_ton": 8.25}, {"origin": "Amrize: Melissa Rail", "plant_code": "P4964", "plant_name": "FORNEY", "rate_per_ton": 9.6}, {"origin": "Amrize: Melissa Rail", "plant_code": "P4958", "plant_name": "MCKINNEY", "rate_per_ton": 3.45}, {"origin": "Amrize: Melissa Rail", "plant_code": "P4950", "plant_name": "PLANO", "rate_per_ton": 4.8}, {"origin": "Amrize: Melissa Rail", "plant_code": "P4296", "plant_name": "PORTABLE L", "rate_per_ton": 5.0}, {"origin": "Amrize: Melissa Rail", "plant_code": "P4959", "plant_name": "ROCKWALL", "rate_per_ton": 8.25}, {"origin": "Amrize: Melissa Rail", "plant_code": "P4963", "plant_name": "ROYSE CITY", "rate_per_ton": 8.15}, {"origin": "Amrize: Melissa Rail", "plant_code": "P4953", "plant_name": "WYLIE", "rate_per_ton": 6.35}];
 
 // ---------- ADDRESS BOOK VIEWER ----------
 
@@ -875,6 +889,9 @@ function renderDriverAssignment(){
         <div class="driver-phone-edit" onclick="editRating('${escapeHtml(d.name).replace(/'/g,"\\'")}', '${d.rating || 3}')">
           ${'★'.repeat(Math.round(d.rating || 3))}${'☆'.repeat(5 - Math.round(d.rating || 3))} · edit
         </div>
+        <div class="driver-phone-edit" onclick="editStartTime('${escapeHtml(d.name).replace(/'/g,"\\'")}', '${d.start_time || ''}')">
+          ${d.start_time ? 'Starts ' + escapeHtml(formatHHMM(d.start_time)) + ' · edit' : '+ set start time'}
+        </div>
       </div>
       <input type="number" min="0" class="qty-input" value="${assignments[d.name] || ''}"
         placeholder="0" oninput="setAssignment('${escapeHtml(d.name).replace(/'/g,"\\'")}', this.value)">
@@ -917,6 +934,32 @@ async function editRating(driverName, currentRating){
     renderDriverAssignment();
   } catch (err) {
     alert('Could not save rating — check your connection and try again.');
+  }
+}
+
+function formatHHMM(hhmm){
+  const [h, m] = hhmm.split(':').map(Number);
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  return formatClockTime(d);
+}
+
+async function editStartTime(driverName, currentStartTime){
+  const input = window.prompt(`What's the latest ${driverName} can typically start driving? (e.g. 7:00 for 7:00 AM, 24-hour format like 14:30 for 2:30 PM). Leave blank to use the dispatch's own start time.`, currentStartTime || '');
+  if (input === null) return;
+  const cleaned = input.trim();
+  if (cleaned && !/^\d{1,2}:\d{2}$/.test(cleaned)) {
+    alert('Please enter a time like 7:00 or 14:30 (HH:MM, 24-hour format).');
+    return;
+  }
+
+  try {
+    await fetchBridge('saveStartTime', { driver: driverName, startTime: cleaned });
+    const d = driversCache.find(x => x.name === driverName);
+    if (d) d.start_time = cleaned;
+    renderDriverAssignment();
+  } catch (err) {
+    alert('Could not save start time — check your connection and try again.');
   }
 }
 
@@ -1114,6 +1157,19 @@ function formatClockTime(date){
   return `${h}:${String(m).padStart(2,'0')} ${ampm}`;
 }
 
+// A driver's effective start is whichever is LATER: the dispatch's own start
+// time (site opens at X), or the driver's personal earliest-available time.
+// They can't haul before the site opens, and they can't start before they're
+// actually free to drive.
+function driverEffectiveStart(driverStartTimeStr, dispatchStartDate){
+  if (!driverStartTimeStr) return dispatchStartDate;
+  const m = driverStartTimeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return dispatchStartDate;
+  const driverDate = new Date(dispatchStartDate);
+  driverDate.setHours(parseInt(m[1],10), parseInt(m[2],10), 0, 0);
+  return driverDate > dispatchStartDate ? driverDate : dispatchStartDate;
+}
+
 // Converts a 1-5 driver rating into a speed multiplier.
 // 3 = average pace (1.0x), 5 = notably faster (1.3x), 1 = notably slower (0.7x).
 function speedFactor(rating){
@@ -1139,7 +1195,7 @@ function formatDuration(min){
   return `${h} hr ${m} min`;
 }
 
-function renderGoalCheck(drivers, totalQty, cycleMin, startTime, deadlineTime){
+function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlineTime, driverStarts){
   const container = document.getElementById('goalCheckResults');
   if (!container) return;
 
@@ -1156,7 +1212,7 @@ function renderGoalCheck(drivers, totalQty, cycleMin, startTime, deadlineTime){
   const capacities = drivers.map(d => ({
     name: d.name,
     rating: d.rating || 3,
-    capacity: driverCapacity(d.rating, cycleMin, startTime, deadlineTime)
+    capacity: driverCapacity(d.rating, cycleMin, driverStarts[d.name] || dispatchStartTime, deadlineTime)
   }));
   const totalCapacity = capacities.reduce((sum, c) => sum + c.capacity, 0);
   const achievable = totalCapacity >= totalQty;
@@ -1176,7 +1232,7 @@ function renderGoalCheck(drivers, totalQty, cycleMin, startTime, deadlineTime){
   const extraMinNeeded = shortfall * fastestCycle;
 
   const avgCycle = cycleMin / speedFactor(3);
-  const availableMin = (deadlineTime.getTime() - startTime.getTime()) / 60000;
+  const availableMin = (deadlineTime.getTime() - dispatchStartTime.getTime()) / 60000;
   const avgDriverCapacity = Math.max(1, Math.floor(availableMin / avgCycle));
   const extraDriversNeeded = Math.ceil(shortfall / avgDriverCapacity);
 
@@ -1237,9 +1293,68 @@ async function calculateRoute(){
     `;
 
     await applyStrategy('even');
+    updateValueEstimate();
   } catch (err) {
     resultsEl.innerHTML = `<div class="empty-hint">Could not calculate route — ${escapeHtmlSafe(err.message)}</div>`;
   }
+}
+
+// ---------- LOAD VALUE ESTIMATE ----------
+// Matches this dispatch's pickup/delivery against your real Amrize rate table
+// (origin: which yard the material ships from, plant: which destination plant
+// it's going to). Pure local lookup, no network call needed.
+
+function matchRate(pickupStation, deliveryStation){
+  const pickupUpper = (pickupStation || '').toUpperCase();
+  let origin = null;
+  if (pickupUpper.includes('AMBROSE')) origin = 'Amrize: Ambrose';
+  else if (pickupUpper.includes('MELISSA')) origin = 'Amrize: Melissa Rail';
+
+  if (!origin) return { matched: false };
+
+  const deliveryUpper = (deliveryStation || '').toUpperCase();
+  const candidates = RATE_TABLE.filter(r => r.origin === origin);
+  let best = null;
+  candidates.forEach(r => {
+    const plantWords = r.plant_name.split(' ');
+    const allWordsPresent = plantWords.every(w => deliveryUpper.includes(w));
+    if (allWordsPresent && (!best || r.plant_name.length > best.plant_name.length)) {
+      best = r;
+    }
+  });
+
+  if (!best) return { matched: false, origin };
+  return { matched: true, origin, plant: best.plant_name, ratePerTon: best.rate_per_ton };
+}
+
+function updateValueEstimate(){
+  const container = document.getElementById('valueEstimateResults');
+  if (!container) return;
+  const f = currentFields;
+  const quantity = parseInt(f.quantity, 10) || 0;
+  const tonsPerLoad = parseFloat(document.getElementById('tonsPerLoad').value) || 0;
+
+  if (quantity === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const match = matchRate(f.pickupStation, f.deliveryStation);
+  if (!match.matched) {
+    container.innerHTML = '<div class="empty-hint">Could not match this route to a rate — pickup/delivery may not be in the current rate table.</div>';
+    return;
+  }
+
+  const totalTons = quantity * tonsPerLoad;
+  const totalValue = totalTons * match.ratePerTon;
+
+  container.innerHTML = `
+    <div class="value-box">
+      <div class="value-row"><span class="value-label">Rate (${escapeHtmlSafe(match.origin)} → ${escapeHtmlSafe(match.plant)})</span><span>$${match.ratePerTon.toFixed(2)}/ton</span></div>
+      <div class="value-row"><span class="value-label">${quantity} loads × ${tonsPerLoad} tons</span><span>${totalTons.toFixed(1)} tons</span></div>
+      <div class="value-row total"><span>Estimated value</span><span>$${totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span></div>
+    </div>
+  `;
 }
 
 function renderMap(pickupCoord, deliveryCoord, geometry){
@@ -1335,14 +1450,17 @@ async function applyStrategy(strategy){
   renderDriverMessages();
 
   // Render ETA / on-time results for this strategy
-  const startTime = parseStartTime(f.time, f.date);
+  const dispatchStartTime = parseStartTime(f.time, f.date);
   const finishByInput = document.getElementById('finishByTime').value;
   let finishByDate = null;
   if (finishByInput) {
-    finishByDate = new Date(startTime);
+    finishByDate = new Date(dispatchStartTime);
     const [fh, fm] = finishByInput.split(':').map(Number);
     finishByDate.setHours(fh, fm, 0, 0);
   }
+
+  const driverStarts = {};
+  drivers.forEach(d => { driverStarts[d.name] = driverEffectiveStart(d.start_time, dispatchStartTime); });
 
   const resultsHtml = drivers
     .filter(d => newAssignments[d.name] > 0)
@@ -1350,7 +1468,7 @@ async function applyStrategy(strategy){
       const qty = newAssignments[d.name];
       let etaHtml = '<span class="eta-time">—</span>';
       if (cycleMin !== null) {
-        const finish = new Date(startTime.getTime() + qty * cycleMin * 60000);
+        const finish = new Date(driverStarts[d.name].getTime() + qty * cycleMin * 60000);
         const isLate = finishByDate && finish > finishByDate;
         etaHtml = `<span class="eta-time ${finishByDate ? (isLate ? 'late' : 'ontime') : ''}">${formatClockTime(finish)}${isLate ? ' (late)' : ''}</span>`;
       }
@@ -1364,7 +1482,7 @@ async function applyStrategy(strategy){
 
   document.getElementById('strategyResults').innerHTML = resultsHtml || '<div class="empty-hint">No loads assigned under this strategy.</div>';
 
-  renderGoalCheck(drivers, totalQty, cycleMin, startTime, finishByDate);
+  renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, finishByDate, driverStarts);
 }
 
 // ---------- DRIVER REPORT ----------

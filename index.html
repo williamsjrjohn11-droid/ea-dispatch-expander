@@ -193,6 +193,15 @@
   .value-row{display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:13px;}
   .value-row.total{border-top:1px solid var(--border2); margin-top:6px; padding-top:10px; font-size:16px; font-weight:700; color:var(--green);}
   .value-label{color:var(--text-dim);}
+  .tonnage-hint{font-size:11px; color:var(--text-dim); margin-top:6px; line-height:1.4;}
+
+  input[type="time"]::-webkit-calendar-picker-indicator{
+    filter: invert(1);
+    cursor: pointer;
+    padding: 5px;
+    border-radius: 6px;
+    background-color: var(--amber);
+  }
 
   /* Driver report */
   .report-row{display:flex; align-items:center; gap:8px; padding:11px 0; border-bottom:1px solid var(--border);}
@@ -1293,7 +1302,7 @@ async function calculateRoute(){
     `;
 
     await applyStrategy('even');
-    updateValueEstimate();
+    await loadTonnageStatsAndEstimate();
   } catch (err) {
     resultsEl.innerHTML = `<div class="empty-hint">Could not calculate route — ${escapeHtmlSafe(err.message)}</div>`;
   }
@@ -1327,6 +1336,63 @@ function matchRate(pickupStation, deliveryStation){
   return { matched: true, origin, plant: best.plant_name, ratePerTon: best.rate_per_ton };
 }
 
+let tonnageDataCache = null;
+
+async function getTonnageDataCached(){
+  if (tonnageDataCache) return tonnageDataCache;
+  try {
+    const data = await fetchBridge('getTonnageData');
+    tonnageDataCache = data.tonnage || [];
+  } catch (e) {
+    tonnageDataCache = [];
+  }
+  return tonnageDataCache;
+}
+
+// Same keyword-matching approach as matchRate — checks if a historical
+// ticket's pickup/delivery text belongs to the same origin yard + plant.
+function tonnageRowMatchesRoute(row, origin, plantName){
+  const originKeyword = origin === 'Amrize: Ambrose' ? 'AMBROSE' : 'MELISSA';
+  if (!row.pickup.toUpperCase().includes(originKeyword)) return false;
+  const plantWords = plantName.split(' ');
+  const deliverUpper = row.deliver.toUpperCase();
+  return plantWords.every(w => deliverUpper.includes(w));
+}
+
+function computeTonnageStats(rows, origin, plantName){
+  const matching = rows.filter(r => tonnageRowMatchesRoute(r, origin, plantName));
+  if (matching.length === 0) return null;
+  const tons = matching.map(r => r.tons);
+  return {
+    count: matching.length,
+    min: Math.min(...tons),
+    max: Math.max(...tons),
+    avg: tons.reduce((a,b) => a+b, 0) / tons.length
+  };
+}
+
+async function loadTonnageStatsAndEstimate(){
+  const f = currentFields;
+  const match = matchRate(f.pickupStation, f.deliveryStation);
+  if (!match.matched) { updateValueEstimate(); return; }
+
+  const rows = await getTonnageDataCached();
+  const stats = computeTonnageStats(rows, match.origin, match.plant);
+
+  if (stats) {
+    document.getElementById('tonsPerLoad').value = stats.avg.toFixed(1);
+  }
+
+  updateValueEstimate(); // builds the value box (and the empty hint slot) first
+
+  const hintEl = document.getElementById('tonnageHint');
+  if (hintEl) {
+    hintEl.textContent = stats
+      ? `Based on ${stats.count} real load${stats.count===1?'':'s'} on this route: avg ${stats.avg.toFixed(1)} tons (range ${stats.min.toFixed(1)}–${stats.max.toFixed(1)})`
+      : 'No historical loads found for this exact route yet — using default estimate.';
+  }
+}
+
 function updateValueEstimate(){
   const container = document.getElementById('valueEstimateResults');
   if (!container) return;
@@ -1354,6 +1420,7 @@ function updateValueEstimate(){
       <div class="value-row"><span class="value-label">${quantity} loads × ${tonsPerLoad} tons</span><span>${totalTons.toFixed(1)} tons</span></div>
       <div class="value-row total"><span>Estimated value</span><span>$${totalValue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</span></div>
     </div>
+    <div class="tonnage-hint" id="tonnageHint"></div>
   `;
 }
 

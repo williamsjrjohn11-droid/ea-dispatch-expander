@@ -163,6 +163,44 @@
     font-family:var(--mono); font-size:14px; padding:9px 10px; width:100%;
   }
 
+  /* Route planner */
+  #routeMap{width:100%; height:220px; border-radius:8px; margin-bottom:12px; background:var(--panel2);}
+  .plan-inputs{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;}
+  .plan-field label{font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--text3); margin-bottom:4px; display:block; font-weight:600;}
+  .plan-field input{
+    width:100%; background:var(--panel2); border:1px solid var(--border2); border-radius:8px;
+    color:var(--text); font-family:var(--mono); font-size:14px; padding:9px 10px;
+  }
+  .strategy-row{display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;}
+  .strategy-btn{
+    flex:1; min-width:100px; margin:0; padding:11px 8px; font-size:12px; font-weight:600;
+    background:var(--panel2); color:var(--text-dim); border:1px solid var(--border2);
+  }
+  .strategy-btn.active{background:var(--amber); color:#1a1305; border-color:var(--amber);}
+  .plan-summary{font-size:12px; color:var(--text-dim); margin-bottom:12px; line-height:1.5;}
+  .plan-summary b{color:var(--text);}
+  .driver-eta-row{display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:13px;}
+  .driver-eta-row:last-child{border-bottom:none;}
+  .eta-time{font-family:var(--mono); font-weight:600;}
+  .eta-time.late{color:var(--red);}
+  .eta-time.ontime{color:var(--green);}
+  .plan-loading{text-align:center; color:var(--text-dim); font-size:13px; padding:20px 0;}
+
+  /* Driver report */
+  .report-row{display:flex; align-items:center; gap:8px; padding:11px 0; border-bottom:1px solid var(--border);}
+  .report-row:last-child{border-bottom:none;}
+  .report-name{flex:1.4; font-size:13px; font-weight:600; min-width:0;}
+  .report-stat{flex:1; text-align:center; font-family:var(--mono); font-size:13px;}
+  .report-stat-label{font-size:9px; text-transform:uppercase; color:var(--text3); letter-spacing:.03em; display:block; margin-bottom:2px;}
+  .report-head-row{display:flex; gap:8px; padding-bottom:8px; border-bottom:1px solid var(--border2); margin-bottom:2px;}
+  .report-head-row .report-name{font-size:11px; text-transform:uppercase; color:var(--text3); letter-spacing:.03em;}
+  .suggested-rating{display:flex; flex-direction:column; align-items:center; gap:2px;}
+  .suggested-rating .stars{color:var(--amber); font-size:13px;}
+  .apply-rating-btn{
+    width:auto; margin:0; padding:4px 8px; font-size:10px; background:var(--panel2); color:var(--text-dim);
+    border:1px solid var(--border2);
+  }
+
   /* Top nav links + address book + help */
   .top-links{display:flex; gap:10px; margin:-8px 0 16px;}
   .top-link-btn{
@@ -198,6 +236,8 @@
   .help-text{font-size:13px; color:var(--text-dim); line-height:1.5;}
   .help-text b{color:var(--text); font-weight:600;}
 </style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -212,7 +252,22 @@
 
   <div class="top-links">
     <button class="top-link-btn" onclick="openAddressBook()">📖 Address book</button>
+    <button class="top-link-btn" onclick="openDriverReport()">📊 Driver report</button>
     <button class="top-link-btn" onclick="openHelp()">❓ How to use</button>
+  </div>
+
+  <div class="modal-overlay" id="driverReportModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Driver report</h2>
+        <button class="modal-close" onclick="closeModal('driverReportModal')">Close</button>
+      </div>
+      <div class="strategy-row" style="margin-bottom:14px;">
+        <button class="strategy-btn active" id="reportTabWeek" onclick="switchReportTab('week')">This week</button>
+        <button class="strategy-btn" id="reportTabMonth" onclick="switchReportTab('month')">This month</button>
+      </div>
+      <div id="driverReportBody"><div class="plan-loading">Loading...</div></div>
+    </div>
   </div>
 
   <div class="modal-overlay" id="addressBookModal">
@@ -277,6 +332,11 @@ Friday 8/7/26'></textarea>
 
   <div id="reviewBanner" class="review-banner">Some fields couldn't be matched confidently — check them below before sending.</div>
 
+  <div id="multiLoadPanel" class="panel" style="display:none;">
+    <label style="margin-bottom:10px;">Loads in this message — tap one to work on it</label>
+    <div id="multiLoadChips" class="strategy-row" style="flex-wrap:wrap;"></div>
+  </div>
+
   <div id="fieldsPanel" class="panel" style="display:none;">
     <label style="margin-bottom:10px;">Load details — check these before sending</label>
     <div class="field-grid" id="fieldGrid"></div>
@@ -299,6 +359,27 @@ Friday 8/7/26'></textarea>
     <button class="btn-primary save-sheet-btn" onclick="saveToSheet()">Save assignment to LoadTracker</button>
     <div class="save-status" id="saveStatus"></div>
     <button class="refresh-btn" onclick="refreshDrivers()" style="margin-top:10px;">Refresh driver list</button>
+  </div>
+
+  <div id="routePlanPanel" class="panel" style="display:none;">
+    <label style="margin-bottom:10px;">Route &amp; strategic plan</label>
+    <div id="routeMap"></div>
+    <div class="plan-inputs">
+      <div class="plan-field">
+        <label>Load time (min)</label>
+        <input type="number" id="loadTimeMin" value="15" min="0">
+      </div>
+      <div class="plan-field">
+        <label>Unload time (min)</label>
+        <input type="number" id="unloadTimeMin" value="15" min="0">
+      </div>
+    </div>
+    <div class="plan-field" style="margin-bottom:12px;">
+      <label>Needs to finish by (optional)</label>
+      <input type="time" id="finishByTime">
+    </div>
+    <button class="btn-secondary" onclick="calculateRoute()">Calculate route &amp; plan</button>
+    <div id="planResults" style="margin-top:12px;"></div>
   </div>
 
   <div id="driverMessagesPanel" class="panel" style="display:none;">
@@ -436,34 +517,171 @@ let currentFields = null;
 function runParse(){
   const text = document.getElementById('raw').value;
   if(!text.trim()) return;
+
+  const items = detectMultipleLoads(text);
+  if (items.length >= 2) {
+    startMultiLoadFlow(items, text);
+    return;
+  }
+
   const isStructured = /pickup\s*-|delivery\s*-|quantity\s*-/i.test(text);
   const base = isStructured ? parseStructured(text) : parseTerse(text);
+  currentFields = resolveFields(base, text);
 
+  document.getElementById('multiLoadPanel').style.display = 'none';
+  renderFields();
+  renderOutput();
+}
+
+// Turns a parsed "base" object (quantity/product/pickupRaw/deliveryRaw/time/
+// dayName/date) into the full currentFields shape used everywhere else in the
+// app — address book matching, explicit-address detection, confidence scoring.
+function resolveFields(base, fullText){
   const pickupExplicit = explicitAddress(base.pickupRaw);
   const deliveryExplicit = explicitAddress(base.deliveryRaw);
   const pickupMatch = base.pickupRaw ? matchLocation(base.pickupRaw) : {matched:false};
   const deliveryMatch = base.deliveryRaw ? matchLocation(base.deliveryRaw) : {matched:false};
 
-  currentFields = {
+  // When the raw text has the station name and address on the same line
+  // (e.g. structured "Delivery - McKinney—701 Airport Dr..."), strip the
+  // matched address back out so the station name doesn't duplicate it.
+  const stationNameOnly = (raw, explicitAddr) => {
+    if (!explicitAddr) return raw || '';
+    const stripped = (raw || '').replace(explicitAddr, '').replace(/[\s\-—]+$/, '').trim();
+    return stripped || explicitAddr;
+  };
+
+  const fields = {
     quantity: base.quantity || '',
     product: base.product || '',
     dayName: base.dayName || '',
     date: base.date || '',
     time: base.time || '',
-    pickupStation: pickupExplicit ? (base.pickupRaw || '') : (pickupMatch.station || base.pickupRaw || ''),
+    pickupStation: pickupExplicit ? stationNameOnly(base.pickupRaw, pickupExplicit) : (pickupMatch.station || base.pickupRaw || ''),
     pickupAddress: pickupExplicit || pickupMatch.address || '',
     pickupSource: pickupExplicit ? 'explicit' : (pickupMatch.matched ? 'book' : 'none'),
     pickupConfidence: pickupExplicit ? 1 : (pickupMatch.confidence || 0),
-    deliveryStation: deliveryExplicit ? (base.deliveryRaw || '') : (deliveryMatch.station || base.deliveryRaw || ''),
+    deliveryStation: deliveryExplicit ? stationNameOnly(base.deliveryRaw, deliveryExplicit) : (deliveryMatch.station || base.deliveryRaw || ''),
     deliveryAddress: deliveryExplicit || deliveryMatch.address || '',
     deliverySource: deliveryExplicit ? 'explicit' : (deliveryMatch.matched ? 'book' : 'none'),
     deliveryConfidence: deliveryExplicit ? 1 : (deliveryMatch.confidence || 0),
-    notes: /thumbs up|👍/i.test(text) ? 'Acknowledge with 👍' : ''
+    notes: /thumbs up|👍/i.test(fullText) ? 'Acknowledge with 👍' : ''
   };
 
-  const openMatch = text.match(/site opens[^\n]*/i);
-  if(openMatch) currentFields.siteOpens = openMatch[0].trim();
+  const openMatch = fullText.match(/site opens[^\n]*/i);
+  if (openMatch) fields.siteOpens = openMatch[0].trim();
 
+  return fields;
+}
+
+// ---------- MULTIPLE LOAD LINES IN ONE MESSAGE ----------
+// Handles texts like:
+//   10 - 1" rock Melissa to Celina West.
+//   10 - mansand Melissa to Celina west
+// where each line is its own separate load, possibly to different routes,
+// possibly with its own time. A shared date (if present anywhere in the text)
+// applies to every line unless a line has its own explicit date.
+
+// Given a chunk of words BEFORE " to ", figures out where the product
+// description ends and the pickup location name begins, using the address
+// book to find the best-matching location suffix (e.g. "1” rock Melissa" ->
+// product "1” rock", pickup "Melissa").
+function splitProductAndPickup(chunk){
+  const words = chunk.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return { product: '', pickupRaw: '' };
+  let best = { score: 0, splitIdx: words.length - 1 }; // default: last word is the pickup
+  for (let i = words.length - 1; i >= 0; i--) {
+    const candidate = words.slice(i).join(' ');
+    const match = matchLocation(candidate);
+    if (match.matched && match.confidence > best.score) {
+      best = { score: match.confidence, splitIdx: i };
+    }
+  }
+  return {
+    product: words.slice(0, best.splitIdx).join(' ') || words[0],
+    pickupRaw: words.slice(best.splitIdx).join(' ')
+  };
+}
+
+// Parses a single line like "10 - 1" rock Melissa to Celina West." or the
+// older "8 1" Melissa rail to McKinney 5am" style — both work here.
+function parseLoadLine(rawLine){
+  let line = rawLine.trim();
+  if (!line) return null;
+
+  const time = extractTime(line);
+  if (time) {
+    line = line.replace(/(\d{1,2}(:\d{2})?\s?(am|pm))/i, '').trim();
+  }
+  line = line.replace(/\.+$/, '').trim();
+
+  const m = line.match(/^(\d+)\s*-?\s*(.+?)\s+to\s+(.+)$/i);
+  if (!m) return null;
+
+  const beforeTo = m[2].trim();
+  const deliveryRaw = m[3].trim();
+  if (!beforeTo || !deliveryRaw) return null;
+
+  const { product, pickupRaw } = splitProductAndPickup(beforeTo);
+  if (!pickupRaw) return null;
+
+  return {
+    quantity: m[1],
+    product,
+    pickupRaw,
+    deliveryRaw,
+    time
+  };
+}
+
+// Scans every line of the text; only lines that independently match the
+// "QTY ... to DELIVERY" shape count as a load line. A single matching line
+// (the normal case, even when time/date wrap onto their own separate lines)
+// falls through to the existing single-dispatch parser untouched.
+function detectMultipleLoads(text){
+  const sharedDate = extractDate(text);
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const items = [];
+  lines.forEach(line => {
+    const parsed = parseLoadLine(line);
+    if (parsed) {
+      if (!parsed.dayName && !parsed.date) {
+        parsed.dayName = sharedDate.dayName;
+        parsed.date = sharedDate.date;
+      }
+      items.push(parsed);
+    }
+  });
+  return items;
+}
+
+let multiLoadItems = [];
+let activeMultiLoadIndex = 0;
+const multiLoadSavedFlags = {};
+
+function startMultiLoadFlow(items, fullText){
+  multiLoadItems = items.map(base => resolveFields(base, fullText));
+  activeMultiLoadIndex = 0;
+  Object.keys(multiLoadSavedFlags).forEach(k => delete multiLoadSavedFlags[k]);
+
+  document.getElementById('multiLoadPanel').style.display = 'block';
+  renderMultiLoadChips();
+  loadMultiLoadItem(0);
+}
+
+function renderMultiLoadChips(){
+  const container = document.getElementById('multiLoadChips');
+  container.innerHTML = multiLoadItems.map((f, i) => {
+    const label = `${f.quantity || '?'} — ${f.product || 'load'} · ${f.pickupStation || f.pickupRaw || '?'} → ${f.deliveryStation || f.deliveryRaw || '?'}`;
+    const saved = multiLoadSavedFlags[i] ? ' ✓' : '';
+    return `<button class="strategy-btn ${i === activeMultiLoadIndex ? 'active' : ''}" onclick="loadMultiLoadItem(${i})">${escapeHtmlSafe(label)}${saved}</button>`;
+  }).join('');
+}
+
+function loadMultiLoadItem(index){
+  activeMultiLoadIndex = index;
+  currentFields = multiLoadItems[index];
+  renderMultiLoadChips();
   renderFields();
   renderOutput();
 }
@@ -509,6 +727,7 @@ function updateField(key, value){
 
 function renderOutput(){
   const f = currentFields;
+  Object.keys(assignments).forEach(k => delete assignments[k]); // fresh slate for this dispatch/item
   const dateLine = [f.dayName, f.date].filter(Boolean).join(' ');
   const lines = [];
   lines.push('Please acknowledge all dispatches with a thumbs up 👍');
@@ -535,6 +754,9 @@ function renderOutput(){
     : '<span class="badge badge-book">ready</span>';
 
   document.getElementById('assignPanel').style.display = 'block';
+  document.getElementById('routePlanPanel').style.display = 'block';
+  document.getElementById('planResults').innerHTML = '';
+  if (window.routeMapInstance) { window.routeMapInstance.remove(); window.routeMapInstance = null; }
   renderDriverAssignment();
 }
 
@@ -650,6 +872,9 @@ function renderDriverAssignment(){
         <div class="driver-phone-edit" onclick="editPhone('${escapeHtml(d.name).replace(/'/g,"\\'")}', '${escapeHtml(d.phone || '')}')">
           ${d.phone ? escapeHtml(formatPhone(d.phone)) + ' · edit' : '+ add phone'}
         </div>
+        <div class="driver-phone-edit" onclick="editRating('${escapeHtml(d.name).replace(/'/g,"\\'")}', '${d.rating || 3}')">
+          ${'★'.repeat(Math.round(d.rating || 3))}${'☆'.repeat(5 - Math.round(d.rating || 3))} · edit
+        </div>
       </div>
       <input type="number" min="0" class="qty-input" value="${assignments[d.name] || ''}"
         placeholder="0" oninput="setAssignment('${escapeHtml(d.name).replace(/'/g,"\\'")}', this.value)">
@@ -673,6 +898,25 @@ async function editPhone(driverName, currentPhone){
     renderDriverMessages();
   } catch (err) {
     alert('Could not save phone number — check your connection and try again.');
+  }
+}
+
+async function editRating(driverName, currentRating){
+  const input = window.prompt(`Speed rating for ${driverName} (1-5, 3 = average pace, 5 = fastest):`, currentRating || '3');
+  if (input === null) return;
+  const num = parseFloat(input);
+  if (isNaN(num) || num < 1 || num > 5) {
+    alert('Rating must be a number between 1 and 5.');
+    return;
+  }
+
+  try {
+    await fetchBridge('saveRating', { driver: driverName, rating: num });
+    const d = driversCache.find(x => x.name === driverName);
+    if (d) d.rating = num;
+    renderDriverAssignment();
+  } catch (err) {
+    alert('Could not save rating — check your connection and try again.');
   }
 }
 
@@ -800,6 +1044,10 @@ async function saveToSheet(){
     const result = await fetchBridge('saveAssignments', { payload: JSON.stringify(payload) });
     statusEl.className = 'save-status show ok';
     statusEl.textContent = `✓ Saved ${result.rows_written} assignment(s) to LoadTracker`;
+    if (multiLoadItems.length > 0) {
+      multiLoadSavedFlags[activeMultiLoadIndex] = true;
+      renderMultiLoadChips();
+    }
   } catch (err) {
     statusEl.className = 'save-status show err';
     statusEl.textContent = 'Could not save — check your connection and try again.';
@@ -813,6 +1061,462 @@ document.addEventListener('DOMContentLoaded', () => {
   if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
   refreshDrivers();
 });
+
+// ---------- ROUTE & STRATEGIC PLAN ----------
+// Uses free OpenStreetMap (Nominatim for geocoding, OSRM for routing) — no API
+// key, no monthly cost. Same approach as the standalone haul bid calculator.
+
+const geocodeCache = {};
+
+async function geocodeAddress(address){
+  if (geocodeCache[address]) return geocodeCache[address];
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!data || data.length === 0) throw new Error('Could not locate: ' + address);
+  const coord = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+  geocodeCache[address] = coord;
+  return coord;
+}
+
+async function getDrivingRoute(origin, dest){
+  const url = `https://router.project-osrm.org/route/v1/driving/${origin.lon},${origin.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!data.routes || data.routes.length === 0) throw new Error('No route found');
+  const route = data.routes[0];
+  return {
+    durationMin: route.duration / 60,
+    distanceMi: route.distance / 1609.34,
+    geometry: route.geometry.coordinates.map(c => [c[1], c[0]]) // lon,lat -> lat,lon for Leaflet
+  };
+}
+
+function parseStartTime(timeStr, dateStr){
+  // timeStr like "5am", "4:30pm"; returns a Date object for today (or dateStr if parseable)
+  const m = (timeStr || '').match(/(\d{1,2})(:(\d{2}))?\s?(am|pm)/i);
+  const base = new Date();
+  if (!m) return base;
+  let hour = parseInt(m[1], 10);
+  const min = m[3] ? parseInt(m[3], 10) : 0;
+  const isPM = /pm/i.test(m[4]);
+  if (isPM && hour !== 12) hour += 12;
+  if (!isPM && hour === 12) hour = 0;
+  base.setHours(hour, min, 0, 0);
+  return base;
+}
+
+function formatClockTime(date){
+  let h = date.getHours();
+  const m = date.getMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12; if (h === 0) h = 12;
+  return `${h}:${String(m).padStart(2,'0')} ${ampm}`;
+}
+
+// Converts a 1-5 driver rating into a speed multiplier.
+// 3 = average pace (1.0x), 5 = notably faster (1.3x), 1 = notably slower (0.7x).
+function speedFactor(rating){
+  const r = rating || 3;
+  return 0.7 + (r - 1) * 0.15;
+}
+
+// How many loads a driver can realistically complete between startTime and
+// deadlineTime, given their personal cycle time (adjusted by their rating).
+function driverCapacity(rating, cycleMin, startTime, deadlineTime){
+  if (!deadlineTime) return Infinity;
+  const availableMin = (deadlineTime.getTime() - startTime.getTime()) / 60000;
+  if (availableMin <= 0) return 0;
+  const personalCycle = cycleMin / speedFactor(rating);
+  return Math.floor(availableMin / personalCycle);
+}
+
+function formatDuration(min){
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h} hr`;
+  return `${h} hr ${m} min`;
+}
+
+function renderGoalCheck(drivers, totalQty, cycleMin, startTime, deadlineTime){
+  const container = document.getElementById('goalCheckResults');
+  if (!container) return;
+
+  if (!cycleMin) {
+    container.innerHTML = '<div class="empty-hint">Route needs to load first.</div>';
+    return;
+  }
+
+  if (!deadlineTime) {
+    container.innerHTML = '<div class="empty-hint">Set a "needs to finish by" time above to check whether this dispatch is achievable.</div>';
+    return;
+  }
+
+  const capacities = drivers.map(d => ({
+    name: d.name,
+    rating: d.rating || 3,
+    capacity: driverCapacity(d.rating, cycleMin, startTime, deadlineTime)
+  }));
+  const totalCapacity = capacities.reduce((sum, c) => sum + c.capacity, 0);
+  const achievable = totalCapacity >= totalQty;
+
+  if (achievable) {
+    container.innerHTML = `
+      <div class="plan-summary" style="color:var(--green);">
+        ✓ <b>Achievable</b> — your ${drivers.length} driver${drivers.length===1?'':'s'} can complete up to <b>${totalCapacity} loads</b> by ${formatClockTime(deadlineTime)}, and you only need ${totalQty}.
+      </div>
+    `;
+    return;
+  }
+
+  const shortfall = totalQty - totalCapacity;
+  const fastest = capacities.slice().sort((a,b) => b.rating - a.rating)[0];
+  const fastestCycle = cycleMin / speedFactor(fastest ? fastest.rating : 3);
+  const extraMinNeeded = shortfall * fastestCycle;
+
+  const avgCycle = cycleMin / speedFactor(3);
+  const availableMin = (deadlineTime.getTime() - startTime.getTime()) / 60000;
+  const avgDriverCapacity = Math.max(1, Math.floor(availableMin / avgCycle));
+  const extraDriversNeeded = Math.ceil(shortfall / avgDriverCapacity);
+
+  container.innerHTML = `
+    <div class="plan-summary" style="color:var(--red);">
+      ⚠ <b>Not achievable as-is</b> — your ${drivers.length} driver${drivers.length===1?'':'s'} can complete about <b>${totalCapacity} of ${totalQty} loads</b> by ${formatClockTime(deadlineTime)}. Short by <b>${shortfall} load${shortfall===1?'':'s'}</b>.
+    </div>
+    <div class="plan-summary">
+      <b>Possible fixes:</b><br>
+      • Push the deadline back by about <b>${formatDuration(extraMinNeeded)}</b> (using your fastest-rated driver for the extra loads), or<br>
+      • Add <b>${extraDriversNeeded} more average-paced driver${extraDriversNeeded===1?'':'s'}</b> to cover the shortfall
+    </div>
+  `;
+}
+
+let currentRouteData = null; // { durationMin, distanceMi }
+let currentStrategy = 'even';
+
+async function calculateRoute(){
+  const resultsEl = document.getElementById('planResults');
+  const f = currentFields;
+  if (!f.pickupAddress || !f.deliveryAddress) {
+    resultsEl.innerHTML = '<div class="empty-hint">Pickup and delivery addresses are needed to calculate a route.</div>';
+    return;
+  }
+
+  resultsEl.innerHTML = '<div class="plan-loading">Looking up the route...</div>';
+
+  try {
+    const [pickupCoord, deliveryCoord] = await Promise.all([
+      geocodeAddress(f.pickupAddress),
+      geocodeAddress(f.deliveryAddress)
+    ]);
+    const route = await getDrivingRoute(pickupCoord, deliveryCoord);
+    currentRouteData = route;
+
+    renderMap(pickupCoord, deliveryCoord, route.geometry);
+
+    const loadMin = parseInt(document.getElementById('loadTimeMin').value, 10) || 0;
+    const unloadMin = parseInt(document.getElementById('unloadTimeMin').value, 10) || 0;
+    const cycleMin = (route.durationMin * 2) + loadMin + unloadMin;
+
+    resultsEl.innerHTML = `
+      <div class="plan-summary">
+        <b>${route.distanceMi.toFixed(1)} mi</b> one-way, about <b>${Math.round(route.durationMin)} min</b> driving each way.
+        Full round trip (drive + load + unload): <b>${Math.round(cycleMin)} min per load</b>.
+      </div>
+      <div class="strategy-row">
+        <button class="strategy-btn" id="stratFastest" onclick="applyStrategy('fastest')">Fastest finish</button>
+        <button class="strategy-btn" id="stratEven" onclick="applyStrategy('even')">Even split</button>
+        <button class="strategy-btn" id="stratLeastBusy" onclick="applyStrategy('leastBusy')">Least busy first</button>
+      </div>
+      <div id="strategyResults"></div>
+      <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+        <label style="margin-bottom:8px;">Can we hit the goal?</label>
+        <div id="goalCheckResults"></div>
+      </div>
+    `;
+
+    await applyStrategy('even');
+  } catch (err) {
+    resultsEl.innerHTML = `<div class="empty-hint">Could not calculate route — ${escapeHtmlSafe(err.message)}</div>`;
+  }
+}
+
+function renderMap(pickupCoord, deliveryCoord, geometry){
+  const mapEl = document.getElementById('routeMap');
+  if (window.routeMapInstance) { window.routeMapInstance.remove(); }
+  const map = L.map(mapEl, { attributionControl: true, zoomControl: true });
+  window.routeMapInstance = map;
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors', maxZoom: 18
+  }).addTo(map);
+
+  L.marker([pickupCoord.lat, pickupCoord.lon]).addTo(map).bindPopup('Pickup');
+  L.marker([deliveryCoord.lat, deliveryCoord.lon]).addTo(map).bindPopup('Delivery');
+
+  if (geometry && geometry.length > 0) {
+    const line = L.polyline(geometry, { color: '#f5a623', weight: 4 }).addTo(map);
+    map.fitBounds(line.getBounds(), { padding: [24, 24] });
+  } else {
+    map.fitBounds([[pickupCoord.lat, pickupCoord.lon], [deliveryCoord.lat, deliveryCoord.lon]], { padding: [24, 24] });
+  }
+}
+
+async function applyStrategy(strategy){
+  currentStrategy = strategy;
+  ['stratFastest','stratEven','stratLeastBusy'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.classList.remove('active');
+  });
+  const activeMap = { fastest: 'stratFastest', even: 'stratEven', leastBusy: 'stratLeastBusy' };
+  const activeBtn = document.getElementById(activeMap[strategy]);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  const f = currentFields;
+  const totalQty = parseInt(f.quantity, 10) || 0;
+  const loadMin = parseInt(document.getElementById('loadTimeMin').value, 10) || 0;
+  const unloadMin = parseInt(document.getElementById('unloadTimeMin').value, 10) || 0;
+  const cycleMin = currentRouteData ? (currentRouteData.durationMin * 2) + loadMin + unloadMin : null;
+
+  // Pull today's already-assigned load counts per driver for busy-weighting
+  let todaysWorkload = {};
+  try {
+    const dateStr = document.getElementById('completionDate').value || new Date().toISOString().slice(0,10);
+    const data = await fetchBridge('getDispatches', { date: dateStr });
+    (data.dispatches || []).forEach(d => {
+      todaysWorkload[d.driver] = (todaysWorkload[d.driver] || 0) + (parseInt(d.qty_assigned, 10) || 0);
+    });
+  } catch (e) { /* fine to proceed without workload data */ }
+
+  const drivers = driversCache.slice();
+  if (drivers.length === 0 || totalQty === 0) {
+    document.getElementById('strategyResults').innerHTML = '<div class="empty-hint">No drivers or quantity to plan.</div>';
+    return;
+  }
+
+  const newAssignments = {};
+  drivers.forEach(d => newAssignments[d.name] = 0);
+
+  if (strategy === 'even') {
+    const base = Math.floor(totalQty / drivers.length);
+    let remainder = totalQty - (base * drivers.length);
+    drivers.forEach(d => newAssignments[d.name] = base);
+    // hand out remainder to least-busy drivers first
+    drivers.slice().sort((a,b) => (todaysWorkload[a.name]||0) - (todaysWorkload[b.name]||0))
+      .forEach(d => { if (remainder > 0) { newAssignments[d.name]++; remainder--; } });
+  } else if (strategy === 'leastBusy') {
+    // Load up the single least-busy driver first, then the next, etc.
+    const sorted = drivers.slice().sort((a,b) => (todaysWorkload[a.name]||0) - (todaysWorkload[b.name]||0));
+    let remaining = totalQty;
+    const maxPerDriver = Math.max(8, Math.ceil(totalQty / Math.max(1, Math.min(3, drivers.length))));
+    for (const d of sorted) {
+      if (remaining <= 0) break;
+      const give = Math.min(remaining, maxPerDriver);
+      newAssignments[d.name] = give;
+      remaining -= give;
+    }
+  } else if (strategy === 'fastest') {
+    // Greedy: always give the next load to whoever has the lowest projected total (existing + assigned) load units
+    const loadUnits = {};
+    drivers.forEach(d => loadUnits[d.name] = todaysWorkload[d.name] || 0);
+    for (let i = 0; i < totalQty; i++) {
+      let minDriver = drivers[0].name;
+      drivers.forEach(d => { if (loadUnits[d.name] < loadUnits[minDriver]) minDriver = d.name; });
+      newAssignments[minDriver]++;
+      loadUnits[minDriver]++;
+    }
+  }
+
+  // Apply to the real assignments object so the existing UI + save flow picks it up
+  Object.keys(assignments).forEach(k => delete assignments[k]);
+  Object.entries(newAssignments).forEach(([name, qty]) => { if (qty > 0) assignments[name] = qty; });
+  renderDriverAssignment();
+  renderDriverMessages();
+
+  // Render ETA / on-time results for this strategy
+  const startTime = parseStartTime(f.time, f.date);
+  const finishByInput = document.getElementById('finishByTime').value;
+  let finishByDate = null;
+  if (finishByInput) {
+    finishByDate = new Date(startTime);
+    const [fh, fm] = finishByInput.split(':').map(Number);
+    finishByDate.setHours(fh, fm, 0, 0);
+  }
+
+  const resultsHtml = drivers
+    .filter(d => newAssignments[d.name] > 0)
+    .map(d => {
+      const qty = newAssignments[d.name];
+      let etaHtml = '<span class="eta-time">—</span>';
+      if (cycleMin !== null) {
+        const finish = new Date(startTime.getTime() + qty * cycleMin * 60000);
+        const isLate = finishByDate && finish > finishByDate;
+        etaHtml = `<span class="eta-time ${finishByDate ? (isLate ? 'late' : 'ontime') : ''}">${formatClockTime(finish)}${isLate ? ' (late)' : ''}</span>`;
+      }
+      return `
+        <div class="driver-eta-row">
+          <span>${escapeHtmlSafe(d.name)} — ${qty} load${qty===1?'':'s'}</span>
+          ${etaHtml}
+        </div>
+      `;
+    }).join('');
+
+  document.getElementById('strategyResults').innerHTML = resultsHtml || '<div class="empty-hint">No loads assigned under this strategy.</div>';
+
+  renderGoalCheck(drivers, totalQty, cycleMin, startTime, finishByDate);
+}
+
+// ---------- DRIVER REPORT ----------
+// Calendar-based (Mon-Sun weeks, real calendar months), pulled from the same
+// read-only Tickets data as the completion tracker, just aggregated further.
+
+let reportCache = null; // { byDriver: { name: {today, week, month, avgPerDayWorked} }, fleetAvg }
+let currentReportTab = 'week';
+
+function formatDateKey(date){
+  return date.toISOString().slice(0, 10);
+}
+
+function getMonday(date){
+  const d = new Date(date);
+  const day = d.getDay(); // 0=Sun,1=Mon,...
+  const diff = day === 0 ? -6 : 1 - day; // shift Sunday back to previous Monday
+  d.setDate(d.getDate() + diff);
+  d.setHours(0,0,0,0);
+  return d;
+}
+
+async function openDriverReport(){
+  document.getElementById('driverReportModal').classList.add('show');
+  const bodyEl = document.getElementById('driverReportBody');
+  bodyEl.innerHTML = '<div class="plan-loading">Loading real numbers from LoadTracker...</div>';
+
+  try {
+    const today = new Date();
+    const todayKey = formatDateKey(today);
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const weekStart = getMonday(today);
+    const rangeStart = weekStart < monthStart ? weekStart : monthStart;
+
+    const data = await fetchBridge('getCompletion', {
+      startDate: formatDateKey(rangeStart),
+      endDate: todayKey
+    });
+    const counts = data.completion || {};
+
+    const monthStartKey = formatDateKey(monthStart);
+    const weekStartKey = formatDateKey(weekStart);
+
+    const byDriver = {};
+    driversCache.forEach(d => { byDriver[d.name] = { today: 0, week: 0, month: 0, daysWorked: new Set() }; });
+
+    Object.entries(counts).forEach(([key, count]) => {
+      const sep = key.lastIndexOf('|');
+      const driver = key.slice(0, sep);
+      const dateKey = key.slice(sep + 1);
+      if (!byDriver[driver]) byDriver[driver] = { today: 0, week: 0, month: 0, daysWorked: new Set() };
+      if (dateKey >= monthStartKey) { byDriver[driver].month += count; byDriver[driver].daysWorked.add(dateKey); }
+      if (dateKey >= weekStartKey) byDriver[driver].week += count;
+      if (dateKey === todayKey) byDriver[driver].today += count;
+    });
+
+    // Fleet average pace (loads per day actually worked this month), used to suggest ratings
+    const paces = [];
+    Object.values(byDriver).forEach(v => {
+      if (v.daysWorked.size > 0) paces.push(v.month / v.daysWorked.size);
+    });
+    const fleetAvg = paces.length > 0 ? paces.reduce((a,b) => a+b, 0) / paces.length : 0;
+
+    Object.keys(byDriver).forEach(name => {
+      const v = byDriver[name];
+      v.avgPerDayWorked = v.daysWorked.size > 0 ? v.month / v.daysWorked.size : null;
+      v.daysWorked = v.daysWorked.size;
+    });
+
+    reportCache = { byDriver, fleetAvg };
+    renderDriverReport();
+  } catch (err) {
+    bodyEl.innerHTML = `<div class="empty-hint">Could not load report — ${escapeHtmlSafe(err.message)}</div>`;
+  }
+}
+
+function switchReportTab(tab){
+  currentReportTab = tab;
+  document.getElementById('reportTabWeek').classList.toggle('active', tab === 'week');
+  document.getElementById('reportTabMonth').classList.toggle('active', tab === 'month');
+  renderDriverReport();
+}
+
+function suggestedRatingFromPace(avgPerDayWorked, fleetAvg){
+  if (avgPerDayWorked === null || fleetAvg === 0) return null;
+  const ratio = avgPerDayWorked / fleetAvg;
+  const raw = (ratio - 0.7) / 0.15 + 1;
+  return Math.max(1, Math.min(5, Math.round(raw)));
+}
+
+function renderDriverReport(){
+  const bodyEl = document.getElementById('driverReportBody');
+  if (!reportCache) return;
+
+  const drivers = driversCache.slice();
+  if (drivers.length === 0) {
+    bodyEl.innerHTML = '<div class="empty-hint">No active drivers found.</div>';
+    return;
+  }
+
+  const rows = drivers.map(d => {
+    const stats = reportCache.byDriver[d.name] || { today: 0, week: 0, month: 0, avgPerDayWorked: null, daysWorked: 0 };
+    const mainStat = currentReportTab === 'week' ? stats.week : stats.month;
+    const suggested = suggestedRatingFromPace(stats.avgPerDayWorked, reportCache.fleetAvg);
+    const currentRating = Math.round(d.rating || 3);
+
+    let suggestionHtml = '<span class="report-stat-label">No data yet</span>';
+    if (suggested !== null) {
+      const matches = suggested === currentRating;
+      suggestionHtml = `
+        <div class="suggested-rating">
+          <span class="stars">${'★'.repeat(suggested)}${'☆'.repeat(5-suggested)}</span>
+          ${matches
+            ? '<span class="report-stat-label" style="color:var(--green);">matches current</span>'
+            : `<button class="apply-rating-btn" onclick="applySuggestedRating('${escapeHtmlSafe(d.name).replace(/'/g,"\\'")}', ${suggested})">Use this (${suggested})</button>`}
+        </div>
+      `;
+    }
+
+    return `
+      <div class="report-row">
+        <div class="report-name">${escapeHtmlSafe(d.name)}</div>
+        <div class="report-stat"><span class="report-stat-label">Today</span>${stats.today}</div>
+        <div class="report-stat"><span class="report-stat-label">${currentReportTab === 'week' ? 'This week' : 'This month'}</span>${mainStat}</div>
+        <div class="report-stat">${suggestionHtml}</div>
+      </div>
+    `;
+  }).join('');
+
+  bodyEl.innerHTML = `
+    <div class="report-head-row">
+      <div class="report-name">Driver</div>
+      <div class="report-stat report-stat-label">Today</div>
+      <div class="report-stat report-stat-label">${currentReportTab === 'week' ? 'This week' : 'This month'}</div>
+      <div class="report-stat report-stat-label">Suggested rating</div>
+    </div>
+    ${rows}
+    <div class="empty-hint" style="padding-top:14px;">Based on EA direct-haul tickets only — Axelar sub-haul loads aren't tracked per driver in LoadTracker.</div>
+  `;
+}
+
+async function applySuggestedRating(driverName, rating){
+  try {
+    await fetchBridge('saveRating', { driver: driverName, rating: rating });
+    const d = driversCache.find(x => x.name === driverName);
+    if (d) d.rating = rating;
+    renderDriverReport();
+    renderDriverAssignment();
+  } catch (err) {
+    alert('Could not save rating — check your connection and try again.');
+  }
+}
 
 async function checkCompletion(){
   const date = document.getElementById('completionDate').value;

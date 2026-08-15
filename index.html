@@ -1122,13 +1122,36 @@ const geocodeCache = {};
 
 async function geocodeAddress(address){
   if (geocodeCache[address]) return geocodeCache[address];
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if (!data || data.length === 0) throw new Error('Could not locate: ' + address);
-  const coord = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-  geocodeCache[address] = coord;
-  return coord;
+
+  // Nominatim (free) doesn't have as rich address-point coverage as Google
+  // for small/rural roads. If the exact address fails, fall back to
+  // progressively simpler versions rather than giving up outright.
+  const attempts = [address];
+  const withoutHouseNumber = address.replace(/^\s*\d+\s+/, '');
+  if (withoutHouseNumber !== address) attempts.push(withoutHouseNumber);
+  const cityStateZip = address.match(/([A-Za-z\s]+,\s*[A-Z]{2}\s*\d{5})\s*$/);
+  if (cityStateZip) attempts.push(cityStateZip[1]);
+
+  let lastError = null;
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=${encodeURIComponent(attempts[i])}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data && data.length > 0) {
+        const coord = {
+          lat: parseFloat(data[0].lat),
+          lon: parseFloat(data[0].lon),
+          approximate: i > 0 // true if we had to fall back to a simplified address
+        };
+        geocodeCache[address] = coord;
+        return coord;
+      }
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw new Error('Could not locate: ' + address);
 }
 
 async function getDrivingRoute(origin, dest){
@@ -1284,11 +1307,16 @@ async function calculateRoute(){
     const unloadMin = parseInt(document.getElementById('unloadTimeMin').value, 10) || 0;
     const cycleMin = (route.durationMin * 2) + loadMin + unloadMin;
 
+    const approxNote = (pickupCoord.approximate || deliveryCoord.approximate)
+      ? '<div class="tonnage-hint">⚠ Exact address not found for ' + (pickupCoord.approximate && deliveryCoord.approximate ? 'pickup and delivery' : pickupCoord.approximate ? 'pickup' : 'delivery') + ' — using an approximate location nearby, so distance/time may be slightly off.</div>'
+      : '';
+
     resultsEl.innerHTML = `
       <div class="plan-summary">
         <b>${route.distanceMi.toFixed(1)} mi</b> one-way, about <b>${Math.round(route.durationMin)} min</b> driving each way.
         Full round trip (drive + load + unload): <b>${Math.round(cycleMin)} min per load</b>.
       </div>
+      ${approxNote}
       <div class="strategy-row">
         <button class="strategy-btn" id="stratFastest" onclick="applyStrategy('fastest')">Fastest finish</button>
         <button class="strategy-btn" id="stratEven" onclick="applyStrategy('even')">Even split</button>

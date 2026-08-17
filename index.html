@@ -403,8 +403,12 @@ Friday 8/7/26'></textarea>
       <input type="number" id="tonsPerLoad" value="24" min="0" step="0.5" onchange="updateValueEstimate()">
     </div>
     <div class="plan-field" style="margin-bottom:12px;">
-      <label>Needs to finish by (optional)</label>
+      <label>Needs to finish by (optional, your own target)</label>
       <input type="time" id="finishByTime">
+    </div>
+    <div class="plan-field" style="margin-bottom:12px;">
+      <label>Plant closes for receiving (hard cutoff)</label>
+      <input type="time" id="plantCutoffTime" value="17:00">
     </div>
     <button class="btn-secondary" onclick="calculateRoute()">Calculate route &amp; plan</button>
     <div id="planResults" style="margin-top:12px;"></div>
@@ -1223,13 +1227,25 @@ function formatClockTime(date){
 // time (site opens at X), or the driver's personal earliest-available time.
 // They can't haul before the site opens, and they can't start before they're
 // actually free to drive.
-function driverEffectiveStart(driverStartTimeStr, dispatchStartDate){
-  if (!driverStartTimeStr) return dispatchStartDate;
-  const m = driverStartTimeStr.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return dispatchStartDate;
-  const driverDate = new Date(dispatchStartDate);
-  driverDate.setHours(parseInt(m[1],10), parseInt(m[2],10), 0, 0);
-  return driverDate > dispatchStartDate ? driverDate : dispatchStartDate;
+const TRUCK_YARD = { lat: 33.251858, lon: -96.544725 }; // SQP Truck Parking and Storage 2
+
+// A driver's day starts when they're actually free (dispatch's own time, or
+// their own personal limit if later) — but they can't begin the load cycle
+// until they've also driven from the yard to the pickup site first.
+function driverEffectiveStart(driverStartTimeStr, dispatchStartDate, yardToPickupMin){
+  let base = dispatchStartDate;
+  if (driverStartTimeStr) {
+    const m = driverStartTimeStr.match(/^(\d{1,2}):(\d{2})$/);
+    if (m) {
+      const driverDate = new Date(dispatchStartDate);
+      driverDate.setHours(parseInt(m[1],10), parseInt(m[2],10), 0, 0);
+      base = driverDate > dispatchStartDate ? driverDate : dispatchStartDate;
+    }
+  }
+  if (yardToPickupMin) {
+    base = new Date(base.getTime() + yardToPickupMin * 60000);
+  }
+  return base;
 }
 
 // Converts a 1-5 driver rating into a speed multiplier.
@@ -1257,7 +1273,7 @@ function formatDuration(min){
   return `${h} hr ${m} min`;
 }
 
-function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlineTime, driverStarts){
+function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlineTime, driverStarts, deadlineIsPlantCutoff){
   const container = document.getElementById('goalCheckResults');
   if (!container) return;
 
@@ -1267,9 +1283,11 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
   }
 
   if (!deadlineTime) {
-    container.innerHTML = '<div class="empty-hint">Set a "needs to finish by" time above to check whether this dispatch is achievable.</div>';
+    container.innerHTML = '<div class="empty-hint">Set a "needs to finish by" or "plant closes for receiving" time above to check whether this dispatch is achievable.</div>';
     return;
   }
+
+  const deadlineLabel = deadlineIsPlantCutoff ? 'plant cutoff' : 'your target';
 
   const capacities = drivers.map(d => ({
     name: d.name,
@@ -1282,7 +1300,7 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
   if (achievable) {
     container.innerHTML = `
       <div class="plan-summary" style="color:var(--green);">
-        ✓ <b>Achievable</b> — your ${drivers.length} driver${drivers.length===1?'':'s'} can complete up to <b>${totalCapacity} loads</b> by ${formatClockTime(deadlineTime)}, and you only need ${totalQty}.
+        ✓ <b>Achievable</b> — your ${drivers.length} driver${drivers.length===1?'':'s'} can complete up to <b>${totalCapacity} loads</b> by ${formatClockTime(deadlineTime)} (${deadlineLabel}), and you only need ${totalQty}.
       </div>
     `;
     return;
@@ -1298,7 +1316,13 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
   const avgDriverCapacity = Math.max(1, Math.floor(availableMin / avgCycle));
   const extraDriversNeeded = Math.ceil(shortfall / avgDriverCapacity);
 
+  const cutoffWarning = deadlineIsPlantCutoff
+    ? '<div class="plan-summary" style="color:var(--amber);">⚠ This is limited by the plant\'s receiving cutoff — pushing your own deadline back won\'t help unless the plant extends its hours too.</div>'
+    : '';
+
   container.innerHTML = `
+    ${cutoffWarning}
+
     <div class="plan-summary" style="color:var(--red);">
       ⚠ <b>Not achievable as-is</b> — your ${drivers.length} driver${drivers.length===1?'':'s'} can complete about <b>${totalCapacity} of ${totalQty} loads</b> by ${formatClockTime(deadlineTime)}. Short by <b>${shortfall} load${shortfall===1?'':'s'}</b>.
     </div>
@@ -1311,6 +1335,7 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
 }
 
 let currentRouteData = null; // { durationMin, distanceMi }
+let currentYardToPickupMin = 0;
 let currentStrategy = 'even';
 
 async function calculateRoute(){
@@ -1331,6 +1356,16 @@ async function calculateRoute(){
     const route = await getDrivingRoute(pickupCoord, deliveryCoord);
     currentRouteData = route;
 
+    // How long from the truck yard to this pickup, for the drivers' first
+    // leg of the day. If this fails for any reason, just skip it rather
+    // than blocking the whole route calculation.
+    try {
+      const yardRoute = await getDrivingRoute(TRUCK_YARD, pickupCoord);
+      currentYardToPickupMin = yardRoute.durationMin;
+    } catch (e) {
+      currentYardToPickupMin = 0;
+    }
+
     renderMap(pickupCoord, deliveryCoord, route.geometry);
 
     const loadMin = parseInt(document.getElementById('loadTimeMin').value, 10) || 0;
@@ -1341,12 +1376,17 @@ async function calculateRoute(){
       ? '<div class="tonnage-hint">⚠ Exact address not found for ' + (pickupCoord.approximate && deliveryCoord.approximate ? 'pickup and delivery' : pickupCoord.approximate ? 'pickup' : 'delivery') + ' — using an approximate location nearby, so distance/time may be slightly off.</div>'
       : '';
 
+    const yardNote = currentYardToPickupMin > 0
+      ? `<div class="tonnage-hint">🚛 Plus ${Math.round(currentYardToPickupMin)} min from the truck yard to pickup — factored into each driver's start time below.</div>`
+      : '';
+
     resultsEl.innerHTML = `
       <div class="plan-summary">
         <b>${route.distanceMi.toFixed(1)} mi</b> one-way, about <b>${Math.round(route.durationMin)} min</b> driving each way.
         Full round trip (drive + load + unload): <b>${Math.round(cycleMin)} min per load</b>.
       </div>
       ${approxNote}
+      ${yardNote}
       <div class="strategy-row">
         <button class="strategy-btn" id="stratFastest" onclick="applyStrategy('fastest')">Fastest finish</button>
         <button class="strategy-btn" id="stratEven" onclick="applyStrategy('even')">Even split</button>
@@ -1576,26 +1616,55 @@ async function applyStrategy(strategy){
 
   // Render ETA / on-time results for this strategy
   const dispatchStartTime = parseStartTime(f.time, f.date);
+
   const finishByInput = document.getElementById('finishByTime').value;
-  let finishByDate = null;
+  let userTargetDate = null;
   if (finishByInput) {
-    finishByDate = new Date(dispatchStartTime);
+    userTargetDate = new Date(dispatchStartTime);
     const [fh, fm] = finishByInput.split(':').map(Number);
-    finishByDate.setHours(fh, fm, 0, 0);
+    userTargetDate.setHours(fh, fm, 0, 0);
+  }
+
+  const plantCutoffInput = document.getElementById('plantCutoffTime').value;
+  let plantCutoffDate = null;
+  if (plantCutoffInput) {
+    plantCutoffDate = new Date(dispatchStartTime);
+    const [ph, pm] = plantCutoffInput.split(':').map(Number);
+    plantCutoffDate.setHours(ph, pm, 0, 0);
+  }
+
+  // The binding deadline is whichever is EARLIER — the plant's hard cutoff
+  // always wins over your own target if your target happens to be later,
+  // since the plant physically can't receive loads past its cutoff.
+  let effectiveDeadline = null;
+  let deadlineIsPlantCutoff = false;
+  if (userTargetDate && plantCutoffDate) {
+    if (plantCutoffDate <= userTargetDate) {
+      effectiveDeadline = plantCutoffDate;
+      deadlineIsPlantCutoff = true;
+    } else {
+      effectiveDeadline = userTargetDate;
+    }
+  } else if (plantCutoffDate) {
+    effectiveDeadline = plantCutoffDate;
+    deadlineIsPlantCutoff = true;
+  } else if (userTargetDate) {
+    effectiveDeadline = userTargetDate;
   }
 
   const driverStarts = {};
-  drivers.forEach(d => { driverStarts[d.name] = driverEffectiveStart(d.start_time, dispatchStartTime); });
+  drivers.forEach(d => { driverStarts[d.name] = driverEffectiveStart(d.start_time, dispatchStartTime, currentYardToPickupMin); });
 
   const resultsHtml = drivers
     .filter(d => newAssignments[d.name] > 0)
     .map(d => {
       const qty = newAssignments[d.name];
+      const start = driverStarts[d.name];
       let etaHtml = '<span class="eta-time">—</span>';
       if (cycleMin !== null) {
-        const finish = new Date(driverStarts[d.name].getTime() + qty * cycleMin * 60000);
-        const isLate = finishByDate && finish > finishByDate;
-        etaHtml = `<span class="eta-time ${finishByDate ? (isLate ? 'late' : 'ontime') : ''}">${formatClockTime(finish)}${isLate ? ' (late)' : ''}</span>`;
+        const finish = new Date(start.getTime() + qty * cycleMin * 60000);
+        const isLate = effectiveDeadline && finish > effectiveDeadline;
+        etaHtml = `<span class="eta-time ${effectiveDeadline ? (isLate ? 'late' : 'ontime') : ''}">Starts ${formatClockTime(start)} · Finishes ${formatClockTime(finish)}${isLate ? ' (late)' : ''}</span>`;
       }
       return `
         <div class="driver-eta-row">
@@ -1607,7 +1676,7 @@ async function applyStrategy(strategy){
 
   document.getElementById('strategyResults').innerHTML = resultsHtml || '<div class="empty-hint">No loads assigned under this strategy.</div>';
 
-  renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, finishByDate, driverStarts);
+  renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, effectiveDeadline, driverStarts, deadlineIsPlantCutoff);
 }
 
 // ---------- DRIVER REPORT ----------

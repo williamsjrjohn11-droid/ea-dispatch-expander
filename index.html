@@ -165,21 +165,22 @@
 
   /* Route planner */
   #routeMap{width:100%; height:220px; border-radius:8px; margin-bottom:12px; background:var(--panel2);}
+  .yard-marker-icon{background:transparent; border:none; font-size:22px; text-align:center; line-height:28px;}
   .plan-inputs{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;}
   .plan-field label{font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--text3); margin-bottom:4px; display:block; font-weight:600;}
   .plan-field input{
     width:100%; background:var(--panel2); border:1px solid var(--border2); border-radius:8px;
     color:var(--text); font-family:var(--mono); font-size:14px; padding:9px 10px;
   }
-  .strategy-row{display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;}
+  .strategy-row{display:flex; gap:8px; margin:16px 0; flex-wrap:wrap;}
   .strategy-btn{
     flex:1; min-width:100px; margin:0; padding:11px 8px; font-size:12px; font-weight:600;
     background:var(--panel2); color:var(--text-dim); border:1px solid var(--border2);
   }
   .strategy-btn.active{background:var(--amber); color:#1a1305; border-color:var(--amber);}
-  .plan-summary{font-size:12px; color:var(--text-dim); margin-bottom:12px; line-height:1.5;}
+  .plan-summary{font-size:12px; color:var(--text-dim); margin:14px 0; line-height:1.6;}
   .plan-summary b{color:var(--text);}
-  .driver-eta-row{display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:13px;}
+  .driver-eta-row{display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--border); font-size:13px; gap:12px;}
   .driver-eta-row:last-child{border-bottom:none;}
   .eta-time{font-family:var(--mono); font-weight:600;}
   .eta-time.late{color:var(--red);}
@@ -193,7 +194,7 @@
   .value-row{display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:13px;}
   .value-row.total{border-top:1px solid var(--border2); margin-top:6px; padding-top:10px; font-size:16px; font-weight:700; color:var(--green);}
   .value-label{color:var(--text-dim);}
-  .tonnage-hint{font-size:11px; color:var(--text-dim); margin-top:6px; line-height:1.4;}
+  .tonnage-hint{font-size:11px; color:var(--text-dim); margin:10px 0; line-height:1.5;}
 
   input[type="time"]::-webkit-calendar-picker-indicator{
     filter: invert(1);
@@ -552,13 +553,29 @@ function runParse(){
   const text = document.getElementById('raw').value;
   if(!text.trim()) return;
 
-  const items = detectMultipleLoads(text);
-  if (items.length >= 2) {
-    startMultiLoadFlow(items, text);
-    return;
+  const isStructured = /pickup\s*-|delivery\s*-|quantity\s*-/i.test(text);
+
+  if (!isStructured) {
+    const items = detectMultipleLoads(text);
+    if (items.length >= 2) {
+      startMultiLoadFlow(items, text);
+      return;
+    }
+    if (items.length === 1) {
+      // The per-line parser is more flexible than the legacy one below
+      // (handles missing time, extra words like "loads", smarter product/
+      // pickup splitting) — use its result directly rather than re-parsing
+      // with the stricter fallback.
+      currentFields = resolveFields(items[0], text);
+      document.getElementById('multiLoadPanel').style.display = 'none';
+      renderFields();
+      renderOutput();
+      return;
+    }
   }
 
-  const isStructured = /pickup\s*-|delivery\s*-|quantity\s*-/i.test(text);
+  // Fallback: structured format, or terse text the per-line parser
+  // couldn't match at all (rare).
   const base = isStructured ? parseStructured(text) : parseTerse(text);
   currentFields = resolveFields(base, text);
 
@@ -631,8 +648,13 @@ function splitProductAndPickup(chunk){
       best = { score: match.confidence, splitIdx: i };
     }
   }
+  const rawProduct = words.slice(0, best.splitIdx).join(' ') || words[0];
+  // "loads"/"load" is often just filler between the quantity and the actual
+  // material name (e.g. "20 loads 1" rock") — strip it so it doesn't end up
+  // glued onto the product text.
+  const product = rawProduct.replace(/^loads?\s+/i, '').trim() || rawProduct;
   return {
-    product: words.slice(0, best.splitIdx).join(' ') || words[0],
+    product,
     pickupRaw: words.slice(best.splitIdx).join(' ')
   };
 }
@@ -674,6 +696,7 @@ function parseLoadLine(rawLine){
 // falls through to the existing single-dispatch parser untouched.
 function detectMultipleLoads(text){
   const sharedDate = extractDate(text);
+  const sharedTime = extractTime(text);
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const items = [];
   lines.forEach(line => {
@@ -682,6 +705,9 @@ function detectMultipleLoads(text){
       if (!parsed.dayName && !parsed.date) {
         parsed.dayName = sharedDate.dayName;
         parsed.date = sharedDate.date;
+      }
+      if (!parsed.time) {
+        parsed.time = sharedTime;
       }
       items.push(parsed);
     }
@@ -1393,8 +1419,8 @@ async function calculateRoute(){
         <button class="strategy-btn" id="stratLeastBusy" onclick="applyStrategy('leastBusy')">Least busy first</button>
       </div>
       <div id="strategyResults"></div>
-      <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
-        <label style="margin-bottom:8px;">Can we hit the goal?</label>
+      <div style="margin-top:24px; padding-top:20px; border-top:1px solid var(--border);">
+        <label style="margin-bottom:12px;">Can we hit the goal?</label>
         <div id="goalCheckResults"></div>
       </div>
     `;
@@ -1532,14 +1558,25 @@ function renderMap(pickupCoord, deliveryCoord, geometry){
     attribution: '© OpenStreetMap contributors', maxZoom: 18
   }).addTo(map);
 
+  const yardIcon = L.divIcon({
+    html: '🚛', className: 'yard-marker-icon', iconSize: [28, 28], iconAnchor: [14, 14]
+  });
+  L.marker([TRUCK_YARD.lat, TRUCK_YARD.lon], { icon: yardIcon }).addTo(map).bindPopup('Truck yard');
   L.marker([pickupCoord.lat, pickupCoord.lon]).addTo(map).bindPopup('Pickup');
   L.marker([deliveryCoord.lat, deliveryCoord.lon]).addTo(map).bindPopup('Delivery');
 
+  // Dashed line for the yard→pickup deadhead leg, distinct from the solid
+  // amber pickup↔delivery route.
+  L.polyline([[TRUCK_YARD.lat, TRUCK_YARD.lon], [pickupCoord.lat, pickupCoord.lon]], {
+    color: '#8b90a8', weight: 3, dashArray: '6, 8'
+  }).addTo(map);
+
+  const bounds = [[TRUCK_YARD.lat, TRUCK_YARD.lon], [pickupCoord.lat, pickupCoord.lon], [deliveryCoord.lat, deliveryCoord.lon]];
   if (geometry && geometry.length > 0) {
     const line = L.polyline(geometry, { color: '#f5a623', weight: 4 }).addTo(map);
-    map.fitBounds(line.getBounds(), { padding: [24, 24] });
+    map.fitBounds([...bounds, ...geometry], { padding: [24, 24] });
   } else {
-    map.fitBounds([[pickupCoord.lat, pickupCoord.lon], [deliveryCoord.lat, deliveryCoord.lon]], { padding: [24, 24] });
+    map.fitBounds(bounds, { padding: [24, 24] });
   }
 }
 

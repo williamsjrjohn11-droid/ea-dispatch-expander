@@ -218,6 +218,13 @@
     border:1px solid var(--border2);
   }
 
+  .driver-row.off-today{opacity:.45;}
+  .off-toggle{
+    font-size:11px; font-weight:700; text-decoration:underline; cursor:pointer; margin-top:4px;
+  }
+  .off-toggle.is-off{color:var(--red);}
+  .off-toggle.is-working{color:var(--text3);}
+
   /* Top nav links + address book + help */
   .top-links{display:flex; gap:10px; margin:-8px 0 16px;}
   .top-link-btn{
@@ -822,6 +829,7 @@ const DRIVER_CACHE_KEY = 'ea_dispatch_drivers_cache';
 
 let driversCache = [];
 let assignments = {}; // driverName -> quantity assigned
+const driverOffToday = new Set(); // session-only, resets on reload
 
 async function fetchBridge(action, params = {}) {
   const url = new URL(BRIDGE_URL);
@@ -887,25 +895,33 @@ function renderDriverAssignment(){
     return;
   }
 
-  list.innerHTML = driversCache.map(d => `
-    <div class="driver-row">
+  list.innerHTML = driversCache.map(d => {
+    const isOff = driverOffToday.has(d.name);
+    const safeName = escapeHtml(d.name).replace(/'/g,"\\'");
+    return `
+    <div class="driver-row ${isOff ? 'off-today' : ''}">
       <div class="driver-info">
         <div class="driver-name">${escapeHtml(d.name)}</div>
         ${d.truck_number ? `<div class="driver-phone">${escapeHtml(d.truck_number)}</div>` : ''}
-        <div class="driver-phone-edit" onclick="editPhone('${escapeHtml(d.name).replace(/'/g,"\\'")}', '${escapeHtml(d.phone || '')}')">
+        <div class="driver-phone-edit" onclick="editPhone('${safeName}', '${escapeHtml(d.phone || '')}')">
           ${d.phone ? escapeHtml(formatPhone(d.phone)) + ' · edit' : '+ add phone'}
         </div>
-        <div class="driver-phone-edit" onclick="editRating('${escapeHtml(d.name).replace(/'/g,"\\'")}', '${d.rating || 3}')">
+        <div class="driver-phone-edit" onclick="editRating('${safeName}', '${d.rating || 3}')">
           ${'★'.repeat(Math.round(d.rating || 3))}${'☆'.repeat(5 - Math.round(d.rating || 3))} · edit
         </div>
-        <div class="driver-phone-edit" onclick="editStartTime('${escapeHtml(d.name).replace(/'/g,"\\'")}', '${d.start_time || ''}')">
+        <div class="driver-phone-edit" onclick="editStartTime('${safeName}', '${d.start_time || ''}')">
           ${d.start_time ? 'Starts ' + escapeHtml(formatHHMM(d.start_time)) + ' · edit' : '+ set start time'}
+        </div>
+        <div class="off-toggle ${isOff ? 'is-off' : 'is-working'}" onclick="toggleDriverOff('${safeName}')">
+          ${isOff ? '🚫 Off today · tap to include' : '✓ Working today · tap to mark off'}
         </div>
       </div>
       <input type="number" min="0" class="qty-input" value="${assignments[d.name] || ''}"
-        placeholder="0" oninput="setAssignment('${escapeHtml(d.name).replace(/'/g,"\\'")}', this.value)">
+        placeholder="${isOff ? 'off' : '0'}" ${isOff ? 'disabled' : ''}
+        oninput="setAssignment('${safeName}', this.value)">
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   updateTotals();
 }
@@ -970,6 +986,20 @@ async function editStartTime(driverName, currentStartTime){
   } catch (err) {
     alert('Could not save start time — check your connection and try again.');
   }
+}
+
+// Session-only — resets on reload. Marking someone off today excludes them
+// from all three assignment strategies and the goal-check capacity total,
+// without touching anything saved to their profile in the Sheet.
+function toggleDriverOff(driverName){
+  if (driverOffToday.has(driverName)) {
+    driverOffToday.delete(driverName);
+  } else {
+    driverOffToday.add(driverName);
+    delete assignments[driverName]; // clear any manual assignment they had
+  }
+  renderDriverAssignment();
+  renderDriverMessages();
 }
 
 function setAssignment(driverName, value){
@@ -1499,9 +1529,9 @@ async function applyStrategy(strategy){
     });
   } catch (e) { /* fine to proceed without workload data */ }
 
-  const drivers = driversCache.slice();
+  const drivers = driversCache.filter(d => !driverOffToday.has(d.name));
   if (drivers.length === 0 || totalQty === 0) {
-    document.getElementById('strategyResults').innerHTML = '<div class="empty-hint">No drivers or quantity to plan.</div>';
+    document.getElementById('strategyResults').innerHTML = '<div class="empty-hint">No drivers available or quantity to plan.</div>';
     return;
   }
 

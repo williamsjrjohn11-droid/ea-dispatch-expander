@@ -1299,6 +1299,24 @@ function formatDuration(min){
   return `${h} hr ${m} min`;
 }
 
+// Estimated tons/value for a given load count, using the same rate table
+// and tons-per-load figure as the main value estimate box. Returns null if
+// the route can't be matched to a rate (in which case callers should just
+// skip the $ line rather than show a broken number).
+function estimateValueForLoads(loadCount){
+  const f = currentFields;
+  const match = matchRate(f.pickupStation, f.deliveryStation);
+  if (!match.matched) return null;
+  const tonsPerLoad = parseFloat(document.getElementById('tonsPerLoad').value) || 0;
+  if (!tonsPerLoad) return null;
+  const tons = loadCount * tonsPerLoad;
+  return { tons, value: tons * match.ratePerTon, ratePerTon: match.ratePerTon };
+}
+
+function formatMoney(v){
+  return '$' + v.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
 function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlineTime, driverStarts, deadlineIsPlantCutoff){
   const container = document.getElementById('goalCheckResults');
   if (!container) return;
@@ -1321,7 +1339,12 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
     capacity: driverCapacity(d.rating, cycleMin, driverStarts[d.name] || dispatchStartTime, deadlineTime)
   }));
   const totalCapacity = capacities.reduce((sum, c) => sum + c.capacity, 0);
+  const maxLoads = Math.min(totalCapacity, totalQty); // never show more than what was actually asked for
   const achievable = totalCapacity >= totalQty;
+  const maxEst = estimateValueForLoads(maxLoads);
+  const maxValueLine = maxEst
+    ? ` (${maxEst.tons.toFixed(1)} tons · ${formatMoney(maxEst.value)} estimated)`
+    : '';
 
   if (achievable) {
     container.innerHTML = `
@@ -1342,6 +1365,11 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
   const avgDriverCapacity = Math.max(1, Math.floor(availableMin / avgCycle));
   const extraDriversNeeded = Math.ceil(shortfall / avgDriverCapacity);
 
+  const shortfallEst = estimateValueForLoads(shortfall);
+  const shortfallValueLine = shortfallEst
+    ? ` (${shortfallEst.tons.toFixed(1)} tons · ${formatMoney(shortfallEst.value)} left uncaptured)`
+    : '';
+
   const cutoffWarning = deadlineIsPlantCutoff
     ? '<div class="plan-summary" style="color:var(--amber);">⚠ This is limited by the plant\'s receiving cutoff — pushing your own deadline back won\'t help unless the plant extends its hours too.</div>'
     : '';
@@ -1349,11 +1377,14 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
   container.innerHTML = `
     ${cutoffWarning}
 
+    <div class="plan-summary" style="color:var(--green);">
+      ✓ <b>Max achievable by ${formatClockTime(deadlineTime)}</b> — your ${drivers.length} driver${drivers.length===1?'':'s'} can complete an estimated <b>${maxLoads} of ${totalQty} loads</b>${maxValueLine}.
+    </div>
     <div class="plan-summary" style="color:var(--red);">
-      ⚠ <b>Not achievable as-is</b> — your ${drivers.length} driver${drivers.length===1?'':'s'} can complete about <b>${totalCapacity} of ${totalQty} loads</b> by ${formatClockTime(deadlineTime)}. Short by <b>${shortfall} load${shortfall===1?'':'s'}</b>.
+      ⚠ Short by <b>${shortfall} load${shortfall===1?'':'s'}</b>${shortfallValueLine}.
     </div>
     <div class="plan-summary">
-      <b>Possible fixes:</b><br>
+      <b>To close the gap:</b><br>
       • Push the deadline back by about <b>${formatDuration(extraMinNeeded)}</b> (using your fastest-rated driver for the extra loads), or<br>
       • Add <b>${extraDriversNeeded} more average-paced driver${extraDriversNeeded===1?'':'s'}</b> to cover the shortfall
     </div>

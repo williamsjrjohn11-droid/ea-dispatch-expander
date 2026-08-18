@@ -1035,9 +1035,10 @@ function renderDriverAssignment(){
     return;
   }
 
-  list.innerHTML = driversCache.map(d => {
+  list.innerHTML = driversCache.map((d, i) => {
     const isOff = driverOffToday.has(d.name);
     const safeName = escapeHtml(d.name).replace(/'/g,"\\'");
+    const qty = assignments[d.name] || 0;
     return `
     <div class="driver-row ${isOff ? 'off-today' : ''}">
       <div class="driver-info">
@@ -1055,15 +1056,34 @@ function renderDriverAssignment(){
         <div class="off-toggle ${isOff ? 'is-off' : 'is-working'}" onclick="toggleDriverOff('${safeName}')">
           ${isOff ? '🚫 Off today · tap to include' : '✓ Working today · tap to mark off'}
         </div>
+        <div class="driver-forecast" id="forecast-${i}">${driverForecastHtml(qty)}</div>
       </div>
       <input type="number" min="0" class="qty-input" value="${assignments[d.name] || ''}"
         placeholder="${isOff ? 'off' : '0'}" ${isOff ? 'disabled' : ''}
-        oninput="setAssignment('${safeName}', this.value)">
+        oninput="setAssignment('${safeName}', this.value, ${i})">
     </div>
   `;
   }).join('');
 
   updateTotals();
+}
+
+// Internal-only $/day forecast for a driver, based on gross load value
+// (rate/ton × tons/load × their assigned load count) against a $1k/day
+// target. Lives ONLY in this planning list — never gets pulled into the
+// driver-facing dispatch text (see renderDriverMessages, which doesn't
+// call this).
+const DAILY_TARGET = 1000;
+function driverForecastHtml(qty){
+  if (!qty) return '';
+  const est = estimateValueForLoads(qty);
+  if (!est) return ''; // no rate matched yet (e.g. fields not filled in) — stay silent rather than show a broken number
+  const short = est.value < DAILY_TARGET;
+  const color = short ? 'var(--red)' : 'var(--green)';
+  const label = short
+    ? `⚠ ~${formatMoney(est.value)} (short ${formatMoney(DAILY_TARGET - est.value)} of $1k)`
+    : `✓ ~${formatMoney(est.value)} today`;
+  return `<div style="color:${color}; font-size:12px; font-weight:700; margin-top:2px;">${label}</div>`;
 }
 
 async function editPhone(driverName, currentPhone){
@@ -1150,12 +1170,16 @@ function toggleDriverOff(driverName){
   renderDriverMessages();
 }
 
-function setAssignment(driverName, value){
+function setAssignment(driverName, value, index){
   const n = parseInt(value, 10);
   if(!value || isNaN(n) || n <= 0){
     delete assignments[driverName];
   } else {
     assignments[driverName] = n;
+  }
+  if (typeof index === 'number') {
+    const el = document.getElementById('forecast-' + index);
+    if (el) el.innerHTML = driverForecastHtml(assignments[driverName] || 0);
   }
   updateTotals();
   renderDriverMessages();

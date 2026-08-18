@@ -1112,7 +1112,7 @@ function formatHHMM(hhmm){
 }
 
 async function editStartTime(driverName, currentStartTime){
-  const input = window.prompt(`What's the latest ${driverName} can typically start driving? (e.g. 7:00 for 7:00 AM, 24-hour format like 14:30 for 2:30 PM). Leave blank to use the dispatch's own start time.`, currentStartTime || '');
+  const input = window.prompt(`What time is ${driverName} personally available to start? (e.g. 7:00 for 7:00 AM, 24-hour format like 14:30 for 2:30 PM). Note: if the dispatch itself doesn't start until later, the later time wins — this only helps if it's LATER than the dispatch start. Leave blank to just use the dispatch's own start time.`, currentStartTime || '');
   if (input === null) return;
   const cleaned = input.trim();
   if (cleaned && !/^\d{1,2}:\d{2}$/.test(cleaned)) {

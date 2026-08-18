@@ -248,10 +248,15 @@
     width:100%; background:var(--panel2); border:1px solid var(--border2); border-radius:8px;
     color:var(--text); font-size:14px; padding:10px; margin-bottom:12px;
   }
-  .addr-entry{padding:10px 0; border-bottom:1px solid var(--border);}
+  .addr-entry{padding:10px 0; border-bottom:1px solid var(--border); cursor:pointer; border-radius:6px; transition:background 0.15s;}
   .addr-entry:last-child{border-bottom:none;}
+  .addr-entry:hover{background:rgba(255,255,255,0.05); padding-left:8px; padding-right:8px;}
+  .addr-entry:active{background:rgba(255,255,255,0.09);}
   .addr-name{font-size:13px; font-weight:700; color:var(--text);}
   .addr-line{font-size:12px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;}
+  .addr-copied{color:var(--green); font-size:11px; font-weight:700; margin-top:2px; display:none;}
+  .field-book-btn{background:none; border:none; cursor:pointer; font-size:13px; padding:0 0 0 6px; opacity:0.75; vertical-align:middle;}
+  .field-book-btn:hover{opacity:1;}
   .help-step{display:flex; gap:12px; padding:10px 0; border-bottom:1px solid var(--border);}
   .help-step:last-child{border-bottom:none;}
   .help-num{
@@ -302,6 +307,7 @@
         <button class="modal-close" onclick="closeModal('addressBookModal')">Close</button>
       </div>
       <input type="text" class="search-input" id="addrSearch" placeholder="Search by name or address..." oninput="renderAddressBook()">
+      <div class="empty-hint" id="addrBookHint" style="margin-bottom:10px;"></div>
       <div id="addrBookList"></div>
     </div>
   </div>
@@ -435,7 +441,16 @@ const RATE_TABLE = [{"origin": "Amrize: Ambrose", "plant_code": "P4954", "plant_
 
 // ---------- ADDRESS BOOK VIEWER ----------
 
-function openAddressBook(){
+let addressBookTarget = null; // null = plain lookup (copy mode); 'pickup' | 'delivery' = fill mode
+
+function openAddressBook(target){
+  addressBookTarget = target || null;
+  const hint = document.getElementById('addrBookHint');
+  if (hint) {
+    hint.textContent = addressBookTarget
+      ? `Tap an address to fill in the ${addressBookTarget === 'pickup' ? 'pickup' : 'delivery'} location.`
+      : 'Tap an address to copy it.';
+  }
   document.getElementById('addressBookModal').classList.add('show');
   renderAddressBook();
 }
@@ -467,12 +482,68 @@ function renderAddressBook(){
     container.innerHTML = '<div class="empty-hint">No matches found.</div>';
     return;
   }
-  container.innerHTML = list.map(loc => `
-    <div class="addr-entry">
+  container.innerHTML = list.map((loc, i) => `
+    <div class="addr-entry" onclick="selectAddressEntry(${i}, this)">
       <div class="addr-name">${escapeHtmlSafe(loc.name)}</div>
       <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
+      <div class="addr-copied">✓ Copied</div>
     </div>
   `).join('');
+  container._locList = list; // stash the current filtered list so click handlers can look it up by index
+}
+
+function selectAddressEntry(index, el){
+  const list = document.getElementById('addrBookList')._locList || [];
+  const loc = list[index];
+  if (!loc) return;
+
+  if (addressBookTarget === 'pickup' || addressBookTarget === 'delivery') {
+    fillAddressField(addressBookTarget, loc);
+    closeModal('addressBookModal');
+    return;
+  }
+
+  copyAddressEntry(loc, el);
+}
+
+// Fills the station + address fields for the given side ('pickup' or
+// 'delivery') from an address book entry, re-renders the field grid and
+// output, and marks the field as book-matched (same badge as an
+// auto-matched entry) so it's clear where the value came from.
+function fillAddressField(side, loc){
+  currentFields[side + 'Station'] = loc.name;
+  currentFields[side + 'Address'] = loc.address;
+  currentFields[side + 'Source'] = 'book';
+  if (side === 'pickup') currentFields.pickupConfidence = 1;
+  if (side === 'delivery') currentFields.deliveryConfidence = 1;
+  renderFields();
+  renderOutput();
+}
+
+function copyAddressEntry(loc, el){
+  const text = `${loc.name}\n${loc.address}`;
+  const showCopied = () => {
+    const badge = el.querySelector('.addr-copied');
+    if (!badge) return;
+    badge.style.display = 'block';
+    clearTimeout(el._copiedTimer);
+    el._copiedTimer = setTimeout(() => { badge.style.display = 'none'; }, 1500);
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(showCopied).catch(showCopied);
+  } else {
+    // Fallback for browsers without the async clipboard API
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    showCopied();
+  }
 }
 
 function escapeHtmlSafe(s){
@@ -770,8 +841,13 @@ function renderFields(){
     else if(source === 'book') badge = '<span class="badge badge-book">matched</span>';
     else if(source === 'none') badge = '<span class="badge badge-review">check this</span>';
     const isLow = (key.startsWith('pickup') && f.pickupConfidence < 0.5) || (key.startsWith('delivery') && f.deliveryConfidence < 0.5);
+    const bookBtn = (key === 'pickupStation')
+      ? '<button type="button" class="field-book-btn" onclick="openAddressBook(\'pickup\')" title="Pick from address book">📖</button>'
+      : (key === 'deliveryStation')
+      ? '<button type="button" class="field-book-btn" onclick="openAddressBook(\'delivery\')" title="Pick from address book">📖</button>'
+      : '';
     return `<div class="field">
-      <div class="field-label"><span>${label}</span>${badge}</div>
+      <div class="field-label"><span>${label}</span>${badge}${bookBtn}</div>
       <input type="text" class="${isLow?'needs-review':''}" value="${(val||'').replace(/"/g,'&quot;')}"
         oninput="updateField('${key}', this.value)">
     </div>`;
@@ -1180,8 +1256,44 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const geocodeCache = {};
 
+// ---------- SAVED EXACT LOCATIONS (override Nominatim once confirmed) ----------
+// Nominatim (free/OSM-based) often can't find exact points for private roads
+// like quarry/yard driveways, so it falls back to an approximate location.
+// Rather than guessing coordinates, we let the user drag the pin to the
+// correct spot on the map once — after that we always use the saved,
+// exact coordinate for that address and skip Nominatim entirely.
+const LOCATION_OVERRIDES_KEY = 'ea_location_overrides_v1';
+
+function getLocationOverrides(){
+  try {
+    return JSON.parse(localStorage.getItem(LOCATION_OVERRIDES_KEY) || '{}');
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveLocationOverride(address, lat, lon){
+  const overrides = getLocationOverrides();
+  overrides[normalize(address)] = { lat, lon };
+  localStorage.setItem(LOCATION_OVERRIDES_KEY, JSON.stringify(overrides));
+  geocodeCache[address] = { lat, lon, approximate: false, overridden: true };
+}
+
+function getLocationOverride(address){
+  const overrides = getLocationOverrides();
+  return overrides[normalize(address)] || null;
+}
+
 async function geocodeAddress(address){
   if (geocodeCache[address]) return geocodeCache[address];
+
+  // Check for a previously-saved exact pin first — always wins over Nominatim.
+  const saved = getLocationOverride(address);
+  if (saved) {
+    const coord = { lat: saved.lat, lon: saved.lon, approximate: false, overridden: true };
+    geocodeCache[address] = coord;
+    return coord;
+  }
 
   // Nominatim (free) doesn't have as rich address-point coverage as Google
   // for small/rural roads. If the exact address fails, fall back to
@@ -1430,7 +1542,9 @@ async function calculateRoute(){
     const cycleMin = (route.durationMin * 2) + loadMin + unloadMin;
 
     const approxNote = (pickupCoord.approximate || deliveryCoord.approximate)
-      ? '<div class="tonnage-hint">⚠ Exact address not found for ' + (pickupCoord.approximate && deliveryCoord.approximate ? 'pickup and delivery' : pickupCoord.approximate ? 'pickup' : 'delivery') + ' — using an approximate location nearby, so distance/time may be slightly off.</div>'
+      ? '<div class="tonnage-hint">⚠ Exact address not found for ' + (pickupCoord.approximate && deliveryCoord.approximate ? 'pickup and delivery' : pickupCoord.approximate ? 'pickup' : 'delivery') + ' — using an approximate location nearby, so distance/time may be slightly off. Drag the pin on the map below to the real spot and tap "Save this spot" to fix it for good.</div>'
+      : (pickupCoord.overridden || deliveryCoord.overridden)
+      ? '<div class="tonnage-hint" style="color:var(--green);">📌 Using your saved exact location for ' + (pickupCoord.overridden && deliveryCoord.overridden ? 'pickup and delivery' : pickupCoord.overridden ? 'pickup' : 'delivery') + '.</div>'
       : '';
 
     const yardNote = currentYardToPickupMin > 0
@@ -1593,8 +1707,11 @@ function renderMap(pickupCoord, deliveryCoord, geometry){
     html: '🚛', className: 'yard-marker-icon', iconSize: [28, 28], iconAnchor: [14, 14]
   });
   L.marker([TRUCK_YARD.lat, TRUCK_YARD.lon], { icon: yardIcon }).addTo(map).bindPopup('Truck yard');
-  L.marker([pickupCoord.lat, pickupCoord.lon]).addTo(map).bindPopup('Pickup');
-  L.marker([deliveryCoord.lat, deliveryCoord.lon]).addTo(map).bindPopup('Delivery');
+
+  // Pickup/delivery pins are draggable so an approximate location can be
+  // corrected once and remembered — see makeSavablePin below.
+  makeSavablePin(map, pickupCoord, currentFields.pickupAddress, 'Pickup');
+  makeSavablePin(map, deliveryCoord, currentFields.deliveryAddress, 'Delivery');
 
   // Dashed line for the yard→pickup deadhead leg, distinct from the solid
   // amber pickup↔delivery route.
@@ -1609,6 +1726,55 @@ function renderMap(pickupCoord, deliveryCoord, geometry){
   } else {
     map.fitBounds(bounds, { padding: [24, 24] });
   }
+}
+
+// Adds a draggable marker for pickup/delivery with a popup offering to save
+// the current pin position as the exact location for that address — used
+// once to correct an approximate geocode, then remembered for every future
+// dispatch to/from that same address (see LOCATION_OVERRIDES_KEY above).
+function makeSavablePin(map, coord, address, label){
+  const marker = L.marker([coord.lat, coord.lon], { draggable: true }).addTo(map);
+
+  const renderPopup = () => {
+    const savedNote = coord.overridden ? '<div style="color:var(--green); font-size:11px; margin-top:4px;">✓ Using saved exact spot</div>' : '';
+    const instructions = coord.approximate
+      ? '<div style="font-size:11px; color:var(--text-dim); margin:4px 0;">Approximate — drag this pin to the real spot, then tap Save.</div>'
+      : '';
+    return `
+      <div style="min-width:160px;">
+        <b>${label}</b>${instructions}${savedNote}
+        <div style="margin-top:6px;">
+          <button type="button" class="strategy-btn" style="padding:4px 10px; font-size:12px;" onclick="saveMarkerPin('${address.replace(/'/g, "\\'")}')">📌 Save this spot</button>
+        </div>
+      </div>
+    `;
+  };
+
+  marker.bindPopup(renderPopup());
+  marker.on('popupopen', () => marker.setPopupContent(renderPopup()));
+  marker.on('dragend', () => {
+    const pos = marker.getLatLng();
+    coord.lat = pos.lat;
+    coord.lon = pos.lng;
+    marker.setPopupContent(renderPopup());
+    marker.openPopup();
+  });
+
+  // Stash a reference so saveMarkerPin (called from the popup button) can
+  // read back the marker's current position without needing a global map.
+  if (!window._savablePins) window._savablePins = {};
+  window._savablePins[normalize(address)] = marker;
+}
+
+function saveMarkerPin(address){
+  const marker = window._savablePins && window._savablePins[normalize(address)];
+  if (!marker) return;
+  const pos = marker.getLatLng();
+  saveLocationOverride(address, pos.lat, pos.lng);
+  marker.closePopup();
+  // Re-run the route calc so the freshly-saved exact pin is used everywhere
+  // (distance, cycle time, driver plan) instead of the old approximate one.
+  calculateRoute();
 }
 
 async function applyStrategy(strategy){

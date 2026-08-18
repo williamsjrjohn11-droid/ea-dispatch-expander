@@ -255,6 +255,10 @@
   .addr-name{font-size:13px; font-weight:700; color:var(--text);}
   .addr-line{font-size:12px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;}
   .addr-copied{color:var(--green); font-size:11px; font-weight:700; margin-top:2px; display:none;}
+  .addr-actions{display:flex; gap:8px; margin-top:8px;}
+  .addr-action-btn{background:rgba(245,166,35,0.12); border:1px solid rgba(245,166,35,0.4); color:var(--amber, #f5a623); font-size:11px; font-weight:700; padding:5px 10px; border-radius:6px; cursor:pointer;}
+  .addr-action-btn:hover{background:rgba(245,166,35,0.22);}
+  .addr-action-btn:active{background:rgba(245,166,35,0.3);}
   .field-book-btn{background:none; border:none; cursor:pointer; font-size:13px; padding:0 0 0 6px; opacity:0.75; vertical-align:middle;}
   .field-book-btn:hover{opacity:1;}
   .help-step{display:flex; gap:12px; padding:10px 0; border-bottom:1px solid var(--border);}
@@ -449,7 +453,7 @@ function openAddressBook(target){
   if (hint) {
     hint.textContent = addressBookTarget
       ? `Tap an address to fill in the ${addressBookTarget === 'pickup' ? 'pickup' : 'delivery'} location.`
-      : 'Tap an address to copy it.';
+      : 'Tap an address to copy it, or use → Pickup / → Delivery to fill it in directly.';
   }
   document.getElementById('addressBookModal').classList.add('show');
   renderAddressBook();
@@ -483,16 +487,28 @@ function renderAddressBook(){
     return;
   }
   container.innerHTML = list.map((loc, i) => `
-    <div class="addr-entry" onclick="selectAddressEntry(${i}, this)">
-      <div class="addr-name">${escapeHtmlSafe(loc.name)}</div>
-      <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
-      <div class="addr-copied">✓ Copied</div>
+    <div class="addr-entry">
+      <div onclick="copyAddressEntryByIndex(${i}, this)">
+        <div class="addr-name">${escapeHtmlSafe(loc.name)}</div>
+        <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
+        <div class="addr-copied">✓ Copied</div>
+      </div>
+      <div class="addr-actions">
+        <button type="button" class="addr-action-btn" onclick="event.stopPropagation(); fillAddressFieldByIndex(${i}, 'pickup')">→ Pickup</button>
+        <button type="button" class="addr-action-btn" onclick="event.stopPropagation(); fillAddressFieldByIndex(${i}, 'delivery')">→ Delivery</button>
+      </div>
     </div>
   `).join('');
   container._locList = list; // stash the current filtered list so click handlers can look it up by index
 }
 
-function selectAddressEntry(index, el){
+// If the address book was opened via one of the field-level 📖 buttons
+// (openAddressBook('pickup') / ('delivery')), a plain tap on the address
+// fills that side directly and closes the modal — the fastest path when
+// you already know which field you're filling. Otherwise (opened from the
+// top nav) a tap just copies, and the → Pickup / → Delivery buttons handle
+// filling instead, since there's no single field already in context.
+function copyAddressEntryByIndex(index, el){
   const list = document.getElementById('addrBookList')._locList || [];
   const loc = list[index];
   if (!loc) return;
@@ -503,19 +519,37 @@ function selectAddressEntry(index, el){
     return;
   }
 
-  copyAddressEntry(loc, el);
+  copyAddressEntry(loc, el.closest('.addr-entry'));
+}
+
+function fillAddressFieldByIndex(index, side){
+  const list = document.getElementById('addrBookList')._locList || [];
+  const loc = list[index];
+  if (!loc) return;
+  fillAddressField(side, loc);
+  closeModal('addressBookModal');
 }
 
 // Fills the station + address fields for the given side ('pickup' or
 // 'delivery') from an address book entry, re-renders the field grid and
 // output, and marks the field as book-matched (same badge as an
-// auto-matched entry) so it's clear where the value came from.
+// auto-matched entry) so it's clear where the value came from. Works even
+// if no dispatch text has been parsed yet — starts a blank set of fields.
 function fillAddressField(side, loc){
+  if (!currentFields) {
+    currentFields = {
+      quantity: '', product: '', dayName: '', date: '', time: '',
+      pickupStation: '', pickupAddress: '', pickupSource: 'none', pickupConfidence: 0,
+      deliveryStation: '', deliveryAddress: '', deliverySource: 'none', deliveryConfidence: 0,
+      notes: ''
+    };
+  }
   currentFields[side + 'Station'] = loc.name;
   currentFields[side + 'Address'] = loc.address;
   currentFields[side + 'Source'] = 'book';
   if (side === 'pickup') currentFields.pickupConfidence = 1;
   if (side === 'delivery') currentFields.deliveryConfidence = 1;
+  document.getElementById('multiLoadPanel').style.display = 'none';
   renderFields();
   renderOutput();
 }

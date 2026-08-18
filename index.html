@@ -1123,6 +1123,12 @@ async function editStartTime(driverName, currentStartTime){
     const d = driversCache.find(x => x.name === driverName);
     if (d) d.start_time = cleaned;
     renderDriverAssignment();
+    // The plan/ETA panel above (Starts/Finishes per driver, goal check) was
+    // built from the old start time — refresh it too, or it keeps showing
+    // stale numbers until the next unrelated recalculation.
+    if (typeof currentRouteData !== 'undefined' && currentRouteData) {
+      await applyStrategy(currentStrategy);
+    }
   } catch (err) {
     alert('Could not save start time — check your connection and try again.');
   }

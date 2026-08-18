@@ -1103,9 +1103,11 @@ async function editRating(driverName, currentRating){
 }
 
 function formatHHMM(hhmm){
-  const [h, m] = hhmm.split(':').map(Number);
+  const m = String(hhmm || '').match(/(\d{1,2}):(\d{2})/);
+  if (!m) return '—'; // couldn't parse — show a dash instead of NaN:NaN
+  const h = parseInt(m[1], 10), min = parseInt(m[2], 10);
   const d = new Date();
-  d.setHours(h, m, 0, 0);
+  d.setHours(h, min, 0, 0);
   return formatClockTime(d);
 }
 
@@ -1413,11 +1415,13 @@ const TRUCK_YARD = { lat: 33.251858, lon: -96.544725 }; // SQP Truck Parking and
 function driverEffectiveStart(driverStartTimeStr, dispatchStartDate, yardToPickupMin){
   let base = dispatchStartDate;
   if (driverStartTimeStr) {
-    const m = driverStartTimeStr.match(/^(\d{1,2}):(\d{2})$/);
+    const m = String(driverStartTimeStr).match(/(\d{1,2}):(\d{2})/);
     if (m) {
       const driverDate = new Date(dispatchStartDate);
       driverDate.setHours(parseInt(m[1],10), parseInt(m[2],10), 0, 0);
-      base = driverDate > dispatchStartDate ? driverDate : dispatchStartDate;
+      if (!isNaN(driverDate.getTime())) {
+        base = driverDate > dispatchStartDate ? driverDate : dispatchStartDate;
+      }
     }
   }
   if (yardToPickupMin) {

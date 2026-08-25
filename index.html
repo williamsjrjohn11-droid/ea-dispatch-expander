@@ -354,7 +354,7 @@
 
   <div class="panel">
     <label for="raw">Raw Amrize text</label>
-    <textarea id="raw" ondragover="event.preventDefault()" ondrop="handleTextDrop(event)" placeholder='e.g. 8 1" Melissa rail to McKinney 5am
+    <textarea id="raw" ondragover="event.preventDefault()" ondrop="handleTextDrop(event)" onpaste="handlePaste(event)" placeholder='e.g. 8 1" Melissa rail to McKinney 5am
 
 Friday 8/7/26'></textarea>
     <button class="btn-primary" onclick="runParse()">Expand dispatch</button>
@@ -582,10 +582,10 @@ function handleTextDrop(event){
 // screenshot specifically, since OCR reads visual position rather than the
 // actual tab characters a text paste preserves. Shows the extracted text
 // for review rather than auto-parsing, since OCR can misread characters.
-async function handleScreenshotUpload(event){
-  const file = event.target.files[0];
-  if (!file) return;
-
+// Shared OCR runner — used by both the file-picker button and pasting an
+// image directly (e.g. Windows Snipping Tool copies an image, not text, so
+// Ctrl+V into a plain text box normally does nothing; this makes it work).
+async function runOcrOnImage(file){
   const statusEl = document.getElementById('ocrStatus');
   statusEl.style.display = 'block';
   statusEl.textContent = 'Reading text from the image... (first scan takes longer while the OCR engine loads)';
@@ -601,9 +601,31 @@ async function handleScreenshotUpload(event){
     statusEl.textContent = '✓ Text extracted — check it above for mistakes before tapping Expand dispatch.';
   } catch (err) {
     statusEl.textContent = 'Could not read the image — try again, or paste the text instead.';
-  } finally {
-    event.target.value = ''; // allow re-selecting the same file if needed
   }
+}
+
+async function handleScreenshotUpload(event){
+  const file = event.target.files[0];
+  if (!file) return;
+  await runOcrOnImage(file);
+  event.target.value = ''; // allow re-selecting the same file if needed
+}
+
+// Detects an image on the clipboard (e.g. Windows Snipping Tool, macOS
+// screenshot copy) and runs OCR on it automatically. Falls through to
+// normal text pasting if the clipboard has no image.
+async function handlePaste(event){
+  const items = event.clipboardData && event.clipboardData.items;
+  if (!items) return;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].type.indexOf('image') === 0) {
+      event.preventDefault();
+      const file = items[i].getAsFile();
+      if (file) await runOcrOnImage(file);
+      return;
+    }
+  }
+  // no image found — let the default text paste happen normally
 }
 
 function runParse(){

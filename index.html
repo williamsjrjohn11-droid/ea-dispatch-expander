@@ -797,24 +797,52 @@ function parseLoadLine(rawLine){
 
 function splitTableRow(line){
   if (line.includes('\t')) return line.split('\t').map(s => s.trim());
+  if (line.includes('|')) return line.split('|').map(s => s.trim());
   return line.split(/\s{2,}/).map(s => s.trim());
 }
 
+function looksLikeDateString(str){
+  if (!/\d{4}/.test(str)) return false; // require a 4-digit year — avoids false positives on random text
+  const d = new Date(str);
+  return !isNaN(d.getTime());
+}
+
+function looksLikeTimeString(str){
+  return /^\d{1,2}(:\d{2})?\s?(am|pm)$/i.test((str || '').trim());
+}
+
+// Reads the tabular "Dispatch Plan" email. Handles tab-separated (normal
+// copy/paste) and pipe-separated (common OCR rendering of table gridlines).
+// Also works without finding the literal header row, by scanning for a line
+// shaped like a data row (date + time in the first two columns).
+//
+// Deliberately does NOT try to guess at rows missing columns (e.g. an OCR
+// scan that cropped out part of the table) — a confidently-wrong guess is
+// worse than clearly asking for manual entry, so those rows are skipped
+// rather than reconstructed.
 function detectEmailTableRows(text){
   const lines = text.split('\n').map(l => l.replace(/\r$/, ''));
   const headerIdx = lines.findIndex(l => /Date\s+Time\s+Carrier\s+Material\s+Source\s+Destination/i.test(l));
-  if (headerIdx === -1) return [];
+  const candidateLines = headerIdx !== -1 ? lines.slice(headerIdx + 1) : lines;
 
   const rows = [];
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    const line = lines[i].trim();
+  for (const rawLine of candidateLines) {
+    const line = rawLine.trim();
     if (!line) continue;
     const cols = splitTableRow(line);
-    if (cols.length < 7) break; // stops at "Total loads planned:", sign-off, etc.
+
+    const columnsLookRight = cols.length >= 7 && looksLikeDateString(cols[0]) && looksLikeTimeString(cols[1]);
+    if (!columnsLookRight) {
+      if (headerIdx !== -1 && rows.length > 0) break; // clean-header mode: stop once rows end
+      continue; // not enough columns to safely parse — skip rather than guess wrong
+    }
 
     const [dateStr, timeStr, carrier, material, source, destination, loadsStr] = cols;
     const qty = parseInt(loadsStr, 10);
-    if (isNaN(qty)) break;
+    if (isNaN(qty)) {
+      if (headerIdx !== -1 && rows.length > 0) break;
+      continue;
+    }
 
     const parsedDate = new Date(dateStr);
     let dayName = '', date = '';
@@ -826,9 +854,9 @@ function detectEmailTableRows(text){
     rows.push({
       quantity: String(qty),
       product: material,
-      pickupRaw: source,       // e.g. "Amrize: Ambrose" — matches the rate table's origin field directly
-      deliveryRaw: destination, // e.g. "4950 - Plano Ready Mix Plant" — plant name matches address book
-      time: (timeStr || '').replace(/\s+/g, '').toLowerCase(),
+      pickupRaw: source,
+      deliveryRaw: destination,
+      time: timeStr.replace(/\s+/g, '').toLowerCase(),
       dayName,
       date
     });

@@ -248,19 +248,10 @@
     width:100%; background:var(--panel2); border:1px solid var(--border2); border-radius:8px;
     color:var(--text); font-size:14px; padding:10px; margin-bottom:12px;
   }
-  .addr-entry{padding:10px 0; border-bottom:1px solid var(--border); cursor:pointer; border-radius:6px; transition:background 0.15s;}
+  .addr-entry{padding:10px 0; border-bottom:1px solid var(--border);}
   .addr-entry:last-child{border-bottom:none;}
-  .addr-entry:hover{background:rgba(255,255,255,0.05); padding-left:8px; padding-right:8px;}
-  .addr-entry:active{background:rgba(255,255,255,0.09);}
   .addr-name{font-size:13px; font-weight:700; color:var(--text);}
   .addr-line{font-size:12px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;}
-  .addr-copied{color:var(--green); font-size:11px; font-weight:700; margin-top:2px; display:none;}
-  .addr-actions{display:flex; gap:8px; margin-top:8px;}
-  .addr-action-btn{background:rgba(245,166,35,0.12); border:1px solid rgba(245,166,35,0.4); color:var(--amber, #f5a623); font-size:11px; font-weight:700; padding:5px 10px; border-radius:6px; cursor:pointer;}
-  .addr-action-btn:hover{background:rgba(245,166,35,0.22);}
-  .addr-action-btn:active{background:rgba(245,166,35,0.3);}
-  .field-book-btn{background:none; border:none; cursor:pointer; font-size:13px; padding:0 0 0 6px; opacity:0.75; vertical-align:middle;}
-  .field-book-btn:hover{opacity:1;}
   .help-step{display:flex; gap:12px; padding:10px 0; border-bottom:1px solid var(--border);}
   .help-step:last-child{border-bottom:none;}
   .help-num{
@@ -272,6 +263,7 @@
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -311,7 +303,6 @@
         <button class="modal-close" onclick="closeModal('addressBookModal')">Close</button>
       </div>
       <input type="text" class="search-input" id="addrSearch" placeholder="Search by name or address..." oninput="renderAddressBook()">
-      <div class="empty-hint" id="addrBookHint" style="margin-bottom:10px;"></div>
       <div id="addrBookList"></div>
     </div>
   </div>
@@ -359,10 +350,13 @@
 
   <div class="panel">
     <label for="raw">Raw Amrize text</label>
-    <textarea id="raw" placeholder='e.g. 8 1" Melissa rail to McKinney 5am
+    <textarea id="raw" ondragover="event.preventDefault()" ondrop="handleTextDrop(event)" placeholder='e.g. 8 1" Melissa rail to McKinney 5am
 
 Friday 8/7/26'></textarea>
     <button class="btn-primary" onclick="runParse()">Expand dispatch</button>
+    <input type="file" id="screenshotInput" accept="image/*" capture="environment" style="display:none;" onchange="handleScreenshotUpload(event)">
+    <button class="btn-secondary" onclick="document.getElementById('screenshotInput').click()" style="margin-top:10px;">📷 Scan a screenshot instead</button>
+    <div id="ocrStatus" class="plan-loading" style="display:none;"></div>
   </div>
 
   <div id="reviewBanner" class="review-banner">Some fields couldn't be matched confidently — check them below before sending.</div>
@@ -445,16 +439,7 @@ const RATE_TABLE = [{"origin": "Amrize: Ambrose", "plant_code": "P4954", "plant_
 
 // ---------- ADDRESS BOOK VIEWER ----------
 
-let addressBookTarget = null; // null = plain lookup (copy mode); 'pickup' | 'delivery' = fill mode
-
-function openAddressBook(target){
-  addressBookTarget = target || null;
-  const hint = document.getElementById('addrBookHint');
-  if (hint) {
-    hint.textContent = addressBookTarget
-      ? `Tap an address to fill in the ${addressBookTarget === 'pickup' ? 'pickup' : 'delivery'} location.`
-      : 'Tap an address to copy it, or use → Pickup / → Delivery to fill it in directly.';
-  }
+function openAddressBook(){
   document.getElementById('addressBookModal').classList.add('show');
   renderAddressBook();
 }
@@ -486,98 +471,12 @@ function renderAddressBook(){
     container.innerHTML = '<div class="empty-hint">No matches found.</div>';
     return;
   }
-  container.innerHTML = list.map((loc, i) => `
+  container.innerHTML = list.map(loc => `
     <div class="addr-entry">
-      <div onclick="copyAddressEntryByIndex(${i}, this)">
-        <div class="addr-name">${escapeHtmlSafe(loc.name)}</div>
-        <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
-        <div class="addr-copied">✓ Copied</div>
-      </div>
-      <div class="addr-actions">
-        <button type="button" class="addr-action-btn" onclick="event.stopPropagation(); fillAddressFieldByIndex(${i}, 'pickup')">→ Pickup</button>
-        <button type="button" class="addr-action-btn" onclick="event.stopPropagation(); fillAddressFieldByIndex(${i}, 'delivery')">→ Delivery</button>
-      </div>
+      <div class="addr-name">${escapeHtmlSafe(loc.name)}</div>
+      <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
     </div>
   `).join('');
-  container._locList = list; // stash the current filtered list so click handlers can look it up by index
-}
-
-// If the address book was opened via one of the field-level 📖 buttons
-// (openAddressBook('pickup') / ('delivery')), a plain tap on the address
-// fills that side directly and closes the modal — the fastest path when
-// you already know which field you're filling. Otherwise (opened from the
-// top nav) a tap just copies, and the → Pickup / → Delivery buttons handle
-// filling instead, since there's no single field already in context.
-function copyAddressEntryByIndex(index, el){
-  const list = document.getElementById('addrBookList')._locList || [];
-  const loc = list[index];
-  if (!loc) return;
-
-  if (addressBookTarget === 'pickup' || addressBookTarget === 'delivery') {
-    fillAddressField(addressBookTarget, loc);
-    closeModal('addressBookModal');
-    return;
-  }
-
-  copyAddressEntry(loc, el.closest('.addr-entry'));
-}
-
-function fillAddressFieldByIndex(index, side){
-  const list = document.getElementById('addrBookList')._locList || [];
-  const loc = list[index];
-  if (!loc) return;
-  fillAddressField(side, loc);
-  closeModal('addressBookModal');
-}
-
-// Fills the station + address fields for the given side ('pickup' or
-// 'delivery') from an address book entry, re-renders the field grid and
-// output, and marks the field as book-matched (same badge as an
-// auto-matched entry) so it's clear where the value came from. Works even
-// if no dispatch text has been parsed yet — starts a blank set of fields.
-function fillAddressField(side, loc){
-  if (!currentFields) {
-    currentFields = {
-      quantity: '', product: '', dayName: '', date: '', time: '',
-      pickupStation: '', pickupAddress: '', pickupSource: 'none', pickupConfidence: 0,
-      deliveryStation: '', deliveryAddress: '', deliverySource: 'none', deliveryConfidence: 0,
-      notes: ''
-    };
-  }
-  currentFields[side + 'Station'] = loc.name;
-  currentFields[side + 'Address'] = loc.address;
-  currentFields[side + 'Source'] = 'book';
-  if (side === 'pickup') currentFields.pickupConfidence = 1;
-  if (side === 'delivery') currentFields.deliveryConfidence = 1;
-  document.getElementById('multiLoadPanel').style.display = 'none';
-  renderFields();
-  renderOutput();
-}
-
-function copyAddressEntry(loc, el){
-  const text = `${loc.name}\n${loc.address}`;
-  const showCopied = () => {
-    const badge = el.querySelector('.addr-copied');
-    if (!badge) return;
-    badge.style.display = 'block';
-    clearTimeout(el._copiedTimer);
-    el._copiedTimer = setTimeout(() => { badge.style.display = 'none'; }, 1500);
-  };
-
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(showCopied).catch(showCopied);
-  } else {
-    // Fallback for browsers without the async clipboard API
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); } catch (e) {}
-    document.body.removeChild(ta);
-    showCopied();
-  }
 }
 
 function escapeHtmlSafe(s){
@@ -654,9 +553,73 @@ function parseTerse(text){
 
 let currentFields = null;
 
+// Drag-and-drop support: works when dragging a text selection (e.g. from an
+// open email in another browser tab) onto the box. Doesn't work for literal
+// email files dragged from a desktop mail app — paste remains the reliable
+// method for that, especially on mobile.
+function handleTextDrop(event){
+  event.preventDefault();
+  let text = event.dataTransfer.getData('text/plain');
+  if (!text) {
+    const html = event.dataTransfer.getData('text/html');
+    if (html) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      text = tmp.textContent || tmp.innerText || '';
+    }
+  }
+  if (text) {
+    document.getElementById('raw').value = text;
+  }
+}
+
+// OCR via Tesseract.js — runs entirely in the browser, free, no API key.
+// Works well for simple one-line texts; less reliably for the tabular email
+// screenshot specifically, since OCR reads visual position rather than the
+// actual tab characters a text paste preserves. Shows the extracted text
+// for review rather than auto-parsing, since OCR can misread characters.
+async function handleScreenshotUpload(event){
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const statusEl = document.getElementById('ocrStatus');
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Reading text from the image... (first scan takes longer while the OCR engine loads)';
+
+  try {
+    const result = await Tesseract.recognize(file, 'eng');
+    const text = (result.data.text || '').trim();
+    if (!text) {
+      statusEl.textContent = 'Could not read any text from that image — try a clearer, well-lit screenshot.';
+      return;
+    }
+    document.getElementById('raw').value = text;
+    statusEl.textContent = '✓ Text extracted — check it above for mistakes before tapping Expand dispatch.';
+  } catch (err) {
+    statusEl.textContent = 'Could not read the image — try again, or paste the text instead.';
+  } finally {
+    event.target.value = ''; // allow re-selecting the same file if needed
+  }
+}
+
 function runParse(){
   const text = document.getElementById('raw').value;
   if(!text.trim()) return;
+
+  // Check for the Amrize dispatch-plan email table first — it's visually
+  // distinct (a header row) and should take priority if present.
+  const emailRows = detectEmailTableRows(text);
+  if (emailRows.length >= 2) {
+    startMultiLoadFlow(emailRows, text);
+    return;
+  }
+  if (emailRows.length === 1) {
+    currentFields = resolveFields(emailRows[0], text);
+    document.getElementById('multiLoadPanel').style.display = 'none';
+    renderFields();
+    renderOutput();
+    return;
+  }
 
   const isStructured = /pickup\s*-|delivery\s*-|quantity\s*-/i.test(text);
 
@@ -799,6 +762,54 @@ function parseLoadLine(rawLine){
 // "QTY ... to DELIVERY" shape count as a load line. A single matching line
 // (the normal case, even when time/date wrap onto their own separate lines)
 // falls through to the existing single-dispatch parser untouched.
+// ---------- AMRIZE DISPATCH EMAIL FORMAT ----------
+// Handles the tabular "Dispatch Plan" emails: a header row (Date / Time /
+// Carrier / Material / Source / Destination / Loads Assigned) followed by
+// one or more data rows, tab-separated (falls back to runs of 2+ spaces if
+// tabs didn't survive copy/paste). Each row becomes its own load — reuses
+// the exact same single/multi-load flow as text-message dispatches.
+
+function splitTableRow(line){
+  if (line.includes('\t')) return line.split('\t').map(s => s.trim());
+  return line.split(/\s{2,}/).map(s => s.trim());
+}
+
+function detectEmailTableRows(text){
+  const lines = text.split('\n').map(l => l.replace(/\r$/, ''));
+  const headerIdx = lines.findIndex(l => /Date\s+Time\s+Carrier\s+Material\s+Source\s+Destination/i.test(l));
+  if (headerIdx === -1) return [];
+
+  const rows = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const cols = splitTableRow(line);
+    if (cols.length < 7) break; // stops at "Total loads planned:", sign-off, etc.
+
+    const [dateStr, timeStr, carrier, material, source, destination, loadsStr] = cols;
+    const qty = parseInt(loadsStr, 10);
+    if (isNaN(qty)) break;
+
+    const parsedDate = new Date(dateStr);
+    let dayName = '', date = '';
+    if (!isNaN(parsedDate.getTime())) {
+      dayName = parsedDate.toLocaleDateString('en-US', { weekday: 'long' });
+      date = `${parsedDate.getMonth()+1}/${parsedDate.getDate()}/${String(parsedDate.getFullYear()).slice(-2)}`;
+    }
+
+    rows.push({
+      quantity: String(qty),
+      product: material,
+      pickupRaw: source,       // e.g. "Amrize: Ambrose" — matches the rate table's origin field directly
+      deliveryRaw: destination, // e.g. "4950 - Plano Ready Mix Plant" — plant name matches address book
+      time: (timeStr || '').replace(/\s+/g, '').toLowerCase(),
+      dayName,
+      date
+    });
+  }
+  return rows;
+}
+
 function detectMultipleLoads(text){
   const sharedDate = extractDate(text);
   const sharedTime = extractTime(text);
@@ -875,13 +886,8 @@ function renderFields(){
     else if(source === 'book') badge = '<span class="badge badge-book">matched</span>';
     else if(source === 'none') badge = '<span class="badge badge-review">check this</span>';
     const isLow = (key.startsWith('pickup') && f.pickupConfidence < 0.5) || (key.startsWith('delivery') && f.deliveryConfidence < 0.5);
-    const bookBtn = (key === 'pickupStation')
-      ? '<button type="button" class="field-book-btn" onclick="openAddressBook(\'pickup\')" title="Pick from address book">📖</button>'
-      : (key === 'deliveryStation')
-      ? '<button type="button" class="field-book-btn" onclick="openAddressBook(\'delivery\')" title="Pick from address book">📖</button>'
-      : '';
     return `<div class="field">
-      <div class="field-label"><span>${label}</span>${badge}${bookBtn}</div>
+      <div class="field-label"><span>${label}</span>${badge}</div>
       <input type="text" class="${isLow?'needs-review':''}" value="${(val||'').replace(/"/g,'&quot;')}"
         oninput="updateField('${key}', this.value)">
     </div>`;
@@ -1035,10 +1041,9 @@ function renderDriverAssignment(){
     return;
   }
 
-  list.innerHTML = driversCache.map((d, i) => {
+  list.innerHTML = driversCache.map(d => {
     const isOff = driverOffToday.has(d.name);
     const safeName = escapeHtml(d.name).replace(/'/g,"\\'");
-    const qty = assignments[d.name] || 0;
     return `
     <div class="driver-row ${isOff ? 'off-today' : ''}">
       <div class="driver-info">
@@ -1056,34 +1061,15 @@ function renderDriverAssignment(){
         <div class="off-toggle ${isOff ? 'is-off' : 'is-working'}" onclick="toggleDriverOff('${safeName}')">
           ${isOff ? '🚫 Off today · tap to include' : '✓ Working today · tap to mark off'}
         </div>
-        <div class="driver-forecast" id="forecast-${i}">${driverForecastHtml(qty)}</div>
       </div>
       <input type="number" min="0" class="qty-input" value="${assignments[d.name] || ''}"
         placeholder="${isOff ? 'off' : '0'}" ${isOff ? 'disabled' : ''}
-        oninput="setAssignment('${safeName}', this.value, ${i})">
+        oninput="setAssignment('${safeName}', this.value)">
     </div>
   `;
   }).join('');
 
   updateTotals();
-}
-
-// Internal-only $/day forecast for a driver, based on gross load value
-// (rate/ton × tons/load × their assigned load count) against a $1k/day
-// target. Lives ONLY in this planning list — never gets pulled into the
-// driver-facing dispatch text (see renderDriverMessages, which doesn't
-// call this).
-const DAILY_TARGET = 1000;
-function driverForecastHtml(qty){
-  if (!qty) return '';
-  const est = estimateValueForLoads(qty);
-  if (!est) return ''; // no rate matched yet (e.g. fields not filled in) — stay silent rather than show a broken number
-  const short = est.value < DAILY_TARGET;
-  const color = short ? 'var(--red)' : 'var(--green)';
-  const label = short
-    ? `⚠ ~${formatMoney(est.value)} (short ${formatMoney(DAILY_TARGET - est.value)} of $1k)`
-    : `✓ ~${formatMoney(est.value)} today`;
-  return `<div style="color:${color}; font-size:12px; font-weight:700; margin-top:2px;">${label}</div>`;
 }
 
 async function editPhone(driverName, currentPhone){
@@ -1123,16 +1109,14 @@ async function editRating(driverName, currentRating){
 }
 
 function formatHHMM(hhmm){
-  const m = String(hhmm || '').match(/(\d{1,2}):(\d{2})/);
-  if (!m) return '—'; // couldn't parse — show a dash instead of NaN:NaN
-  const h = parseInt(m[1], 10), min = parseInt(m[2], 10);
+  const [h, m] = hhmm.split(':').map(Number);
   const d = new Date();
-  d.setHours(h, min, 0, 0);
+  d.setHours(h, m, 0, 0);
   return formatClockTime(d);
 }
 
 async function editStartTime(driverName, currentStartTime){
-  const input = window.prompt(`What time is ${driverName} personally available to start? (e.g. 7:00 for 7:00 AM, 24-hour format like 14:30 for 2:30 PM). Note: if the dispatch itself doesn't start until later, the later time wins — this only helps if it's LATER than the dispatch start. Leave blank to just use the dispatch's own start time.`, currentStartTime || '');
+  const input = window.prompt(`What's the latest ${driverName} can typically start driving? (e.g. 7:00 for 7:00 AM, 24-hour format like 14:30 for 2:30 PM). Leave blank to use the dispatch's own start time.`, currentStartTime || '');
   if (input === null) return;
   const cleaned = input.trim();
   if (cleaned && !/^\d{1,2}:\d{2}$/.test(cleaned)) {
@@ -1145,12 +1129,6 @@ async function editStartTime(driverName, currentStartTime){
     const d = driversCache.find(x => x.name === driverName);
     if (d) d.start_time = cleaned;
     renderDriverAssignment();
-    // The plan/ETA panel above (Starts/Finishes per driver, goal check) was
-    // built from the old start time — refresh it too, or it keeps showing
-    // stale numbers until the next unrelated recalculation.
-    if (typeof currentRouteData !== 'undefined' && currentRouteData) {
-      await applyStrategy(currentStrategy);
-    }
   } catch (err) {
     alert('Could not save start time — check your connection and try again.');
   }
@@ -1170,16 +1148,12 @@ function toggleDriverOff(driverName){
   renderDriverMessages();
 }
 
-function setAssignment(driverName, value, index){
+function setAssignment(driverName, value){
   const n = parseInt(value, 10);
   if(!value || isNaN(n) || n <= 0){
     delete assignments[driverName];
   } else {
     assignments[driverName] = n;
-  }
-  if (typeof index === 'number') {
-    const el = document.getElementById('forecast-' + index);
-    if (el) el.innerHTML = driverForecastHtml(assignments[driverName] || 0);
   }
   updateTotals();
   renderDriverMessages();
@@ -1322,44 +1296,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const geocodeCache = {};
 
-// ---------- SAVED EXACT LOCATIONS (override Nominatim once confirmed) ----------
-// Nominatim (free/OSM-based) often can't find exact points for private roads
-// like quarry/yard driveways, so it falls back to an approximate location.
-// Rather than guessing coordinates, we let the user drag the pin to the
-// correct spot on the map once — after that we always use the saved,
-// exact coordinate for that address and skip Nominatim entirely.
-const LOCATION_OVERRIDES_KEY = 'ea_location_overrides_v1';
-
-function getLocationOverrides(){
-  try {
-    return JSON.parse(localStorage.getItem(LOCATION_OVERRIDES_KEY) || '{}');
-  } catch (e) {
-    return {};
-  }
-}
-
-function saveLocationOverride(address, lat, lon){
-  const overrides = getLocationOverrides();
-  overrides[normalize(address)] = { lat, lon };
-  localStorage.setItem(LOCATION_OVERRIDES_KEY, JSON.stringify(overrides));
-  geocodeCache[address] = { lat, lon, approximate: false, overridden: true };
-}
-
-function getLocationOverride(address){
-  const overrides = getLocationOverrides();
-  return overrides[normalize(address)] || null;
-}
-
 async function geocodeAddress(address){
   if (geocodeCache[address]) return geocodeCache[address];
-
-  // Check for a previously-saved exact pin first — always wins over Nominatim.
-  const saved = getLocationOverride(address);
-  if (saved) {
-    const coord = { lat: saved.lat, lon: saved.lon, approximate: false, overridden: true };
-    geocodeCache[address] = coord;
-    return coord;
-  }
 
   // Nominatim (free) doesn't have as rich address-point coverage as Google
   // for small/rural roads. If the exact address fails, fall back to
@@ -1439,13 +1377,11 @@ const TRUCK_YARD = { lat: 33.251858, lon: -96.544725 }; // SQP Truck Parking and
 function driverEffectiveStart(driverStartTimeStr, dispatchStartDate, yardToPickupMin){
   let base = dispatchStartDate;
   if (driverStartTimeStr) {
-    const m = String(driverStartTimeStr).match(/(\d{1,2}):(\d{2})/);
+    const m = driverStartTimeStr.match(/^(\d{1,2}):(\d{2})$/);
     if (m) {
       const driverDate = new Date(dispatchStartDate);
       driverDate.setHours(parseInt(m[1],10), parseInt(m[2],10), 0, 0);
-      if (!isNaN(driverDate.getTime())) {
-        base = driverDate > dispatchStartDate ? driverDate : dispatchStartDate;
-      }
+      base = driverDate > dispatchStartDate ? driverDate : dispatchStartDate;
     }
   }
   if (yardToPickupMin) {
@@ -1479,24 +1415,6 @@ function formatDuration(min){
   return `${h} hr ${m} min`;
 }
 
-// Estimated tons/value for a given load count, using the same rate table
-// and tons-per-load figure as the main value estimate box. Returns null if
-// the route can't be matched to a rate (in which case callers should just
-// skip the $ line rather than show a broken number).
-function estimateValueForLoads(loadCount){
-  const f = currentFields;
-  const match = matchRate(f.pickupStation, f.deliveryStation);
-  if (!match.matched) return null;
-  const tonsPerLoad = parseFloat(document.getElementById('tonsPerLoad').value) || 0;
-  if (!tonsPerLoad) return null;
-  const tons = loadCount * tonsPerLoad;
-  return { tons, value: tons * match.ratePerTon, ratePerTon: match.ratePerTon };
-}
-
-function formatMoney(v){
-  return '$' + v.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
-}
-
 function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlineTime, driverStarts, deadlineIsPlantCutoff){
   const container = document.getElementById('goalCheckResults');
   if (!container) return;
@@ -1519,12 +1437,7 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
     capacity: driverCapacity(d.rating, cycleMin, driverStarts[d.name] || dispatchStartTime, deadlineTime)
   }));
   const totalCapacity = capacities.reduce((sum, c) => sum + c.capacity, 0);
-  const maxLoads = Math.min(totalCapacity, totalQty); // never show more than what was actually asked for
   const achievable = totalCapacity >= totalQty;
-  const maxEst = estimateValueForLoads(maxLoads);
-  const maxValueLine = maxEst
-    ? ` (${maxEst.tons.toFixed(1)} tons · ${formatMoney(maxEst.value)} estimated)`
-    : '';
 
   if (achievable) {
     container.innerHTML = `
@@ -1545,11 +1458,6 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
   const avgDriverCapacity = Math.max(1, Math.floor(availableMin / avgCycle));
   const extraDriversNeeded = Math.ceil(shortfall / avgDriverCapacity);
 
-  const shortfallEst = estimateValueForLoads(shortfall);
-  const shortfallValueLine = shortfallEst
-    ? ` (${shortfallEst.tons.toFixed(1)} tons · ${formatMoney(shortfallEst.value)} left uncaptured)`
-    : '';
-
   const cutoffWarning = deadlineIsPlantCutoff
     ? '<div class="plan-summary" style="color:var(--amber);">⚠ This is limited by the plant\'s receiving cutoff — pushing your own deadline back won\'t help unless the plant extends its hours too.</div>'
     : '';
@@ -1557,14 +1465,11 @@ function renderGoalCheck(drivers, totalQty, cycleMin, dispatchStartTime, deadlin
   container.innerHTML = `
     ${cutoffWarning}
 
-    <div class="plan-summary" style="color:var(--green);">
-      ✓ <b>Max achievable by ${formatClockTime(deadlineTime)}</b> — your ${drivers.length} driver${drivers.length===1?'':'s'} can complete an estimated <b>${maxLoads} of ${totalQty} loads</b>${maxValueLine}.
-    </div>
     <div class="plan-summary" style="color:var(--red);">
-      ⚠ Short by <b>${shortfall} load${shortfall===1?'':'s'}</b>${shortfallValueLine}.
+      ⚠ <b>Not achievable as-is</b> — your ${drivers.length} driver${drivers.length===1?'':'s'} can complete about <b>${totalCapacity} of ${totalQty} loads</b> by ${formatClockTime(deadlineTime)}. Short by <b>${shortfall} load${shortfall===1?'':'s'}</b>.
     </div>
     <div class="plan-summary">
-      <b>To close the gap:</b><br>
+      <b>Possible fixes:</b><br>
       • Push the deadline back by about <b>${formatDuration(extraMinNeeded)}</b> (using your fastest-rated driver for the extra loads), or<br>
       • Add <b>${extraDriversNeeded} more average-paced driver${extraDriversNeeded===1?'':'s'}</b> to cover the shortfall
     </div>
@@ -1610,9 +1515,7 @@ async function calculateRoute(){
     const cycleMin = (route.durationMin * 2) + loadMin + unloadMin;
 
     const approxNote = (pickupCoord.approximate || deliveryCoord.approximate)
-      ? '<div class="tonnage-hint">⚠ Exact address not found for ' + (pickupCoord.approximate && deliveryCoord.approximate ? 'pickup and delivery' : pickupCoord.approximate ? 'pickup' : 'delivery') + ' — using an approximate location nearby, so distance/time may be slightly off. Drag the pin on the map below to the real spot and tap "Save this spot" to fix it for good.</div>'
-      : (pickupCoord.overridden || deliveryCoord.overridden)
-      ? '<div class="tonnage-hint" style="color:var(--green);">📌 Using your saved exact location for ' + (pickupCoord.overridden && deliveryCoord.overridden ? 'pickup and delivery' : pickupCoord.overridden ? 'pickup' : 'delivery') + '.</div>'
+      ? '<div class="tonnage-hint">⚠ Exact address not found for ' + (pickupCoord.approximate && deliveryCoord.approximate ? 'pickup and delivery' : pickupCoord.approximate ? 'pickup' : 'delivery') + ' — using an approximate location nearby, so distance/time may be slightly off.</div>'
       : '';
 
     const yardNote = currentYardToPickupMin > 0
@@ -1775,11 +1678,8 @@ function renderMap(pickupCoord, deliveryCoord, geometry){
     html: '🚛', className: 'yard-marker-icon', iconSize: [28, 28], iconAnchor: [14, 14]
   });
   L.marker([TRUCK_YARD.lat, TRUCK_YARD.lon], { icon: yardIcon }).addTo(map).bindPopup('Truck yard');
-
-  // Pickup/delivery pins are draggable so an approximate location can be
-  // corrected once and remembered — see makeSavablePin below.
-  makeSavablePin(map, pickupCoord, currentFields.pickupAddress, 'Pickup');
-  makeSavablePin(map, deliveryCoord, currentFields.deliveryAddress, 'Delivery');
+  L.marker([pickupCoord.lat, pickupCoord.lon]).addTo(map).bindPopup('Pickup');
+  L.marker([deliveryCoord.lat, deliveryCoord.lon]).addTo(map).bindPopup('Delivery');
 
   // Dashed line for the yard→pickup deadhead leg, distinct from the solid
   // amber pickup↔delivery route.
@@ -1794,55 +1694,6 @@ function renderMap(pickupCoord, deliveryCoord, geometry){
   } else {
     map.fitBounds(bounds, { padding: [24, 24] });
   }
-}
-
-// Adds a draggable marker for pickup/delivery with a popup offering to save
-// the current pin position as the exact location for that address — used
-// once to correct an approximate geocode, then remembered for every future
-// dispatch to/from that same address (see LOCATION_OVERRIDES_KEY above).
-function makeSavablePin(map, coord, address, label){
-  const marker = L.marker([coord.lat, coord.lon], { draggable: true }).addTo(map);
-
-  const renderPopup = () => {
-    const savedNote = coord.overridden ? '<div style="color:var(--green); font-size:11px; margin-top:4px;">✓ Using saved exact spot</div>' : '';
-    const instructions = coord.approximate
-      ? '<div style="font-size:11px; color:var(--text-dim); margin:4px 0;">Approximate — drag this pin to the real spot, then tap Save.</div>'
-      : '';
-    return `
-      <div style="min-width:160px;">
-        <b>${label}</b>${instructions}${savedNote}
-        <div style="margin-top:6px;">
-          <button type="button" class="strategy-btn" style="padding:4px 10px; font-size:12px;" onclick="saveMarkerPin('${address.replace(/'/g, "\\'")}')">📌 Save this spot</button>
-        </div>
-      </div>
-    `;
-  };
-
-  marker.bindPopup(renderPopup());
-  marker.on('popupopen', () => marker.setPopupContent(renderPopup()));
-  marker.on('dragend', () => {
-    const pos = marker.getLatLng();
-    coord.lat = pos.lat;
-    coord.lon = pos.lng;
-    marker.setPopupContent(renderPopup());
-    marker.openPopup();
-  });
-
-  // Stash a reference so saveMarkerPin (called from the popup button) can
-  // read back the marker's current position without needing a global map.
-  if (!window._savablePins) window._savablePins = {};
-  window._savablePins[normalize(address)] = marker;
-}
-
-function saveMarkerPin(address){
-  const marker = window._savablePins && window._savablePins[normalize(address)];
-  if (!marker) return;
-  const pos = marker.getLatLng();
-  saveLocationOverride(address, pos.lat, pos.lng);
-  marker.closePopup();
-  // Re-run the route calc so the freshly-saved exact pin is used everywhere
-  // (distance, cycle time, driver plan) instead of the old approximate one.
-  calculateRoute();
 }
 
 async function applyStrategy(strategy){

@@ -713,10 +713,21 @@ function extractCoordsFromMapsUrl(url){
 }
 
 function resolveFields(base, fullText){
+  // Check for Google Maps links FIRST — if a facility sends a map link
+  // instead of an address, that's a strong signal this is a brand-new site
+  // with no real street address. In that case we skip the fuzzy address-book
+  // match entirely for that field, rather than risk it confidently matching
+  // an unrelated existing plant just because a word happens to overlap
+  // (e.g. a new "Cottages in Celina" job site vs. the real Celina plant).
+  const { pickupLink, deliveryLink } = findMapsLinks(fullText);
+
+  const pickupRawClean = pickupLink ? (base.pickupRaw || '').replace(pickupLink, '').trim() : (base.pickupRaw || '');
+  const deliveryRawClean = deliveryLink ? (base.deliveryRaw || '').replace(deliveryLink, '').trim() : (base.deliveryRaw || '');
+
   const pickupExplicit = explicitAddress(base.pickupRaw);
   const deliveryExplicit = explicitAddress(base.deliveryRaw);
-  const pickupMatch = base.pickupRaw ? matchLocation(base.pickupRaw) : {matched:false};
-  const deliveryMatch = base.deliveryRaw ? matchLocation(base.deliveryRaw) : {matched:false};
+  const pickupMatch = (!pickupLink && base.pickupRaw) ? matchLocation(base.pickupRaw) : {matched:false};
+  const deliveryMatch = (!deliveryLink && base.deliveryRaw) ? matchLocation(base.deliveryRaw) : {matched:false};
 
   // When the raw text has the station name and address on the same line
   // (e.g. structured "Delivery - McKinney—701 Airport Dr..."), strip the
@@ -727,61 +738,47 @@ function resolveFields(base, fullText){
     return stripped || explicitAddr;
   };
 
+  const pickupCoords = pickupLink ? extractCoordsFromMapsUrl(pickupLink) : null;
+  const deliveryCoords = deliveryLink ? extractCoordsFromMapsUrl(deliveryLink) : null;
+
   const fields = {
     quantity: base.quantity || '',
     product: base.product || '',
     dayName: base.dayName || '',
     date: base.date || '',
     time: base.time || '',
-    pickupStation: pickupExplicit ? stationNameOnly(base.pickupRaw, pickupExplicit) : (pickupMatch.station || base.pickupRaw || ''),
-    pickupAddress: pickupExplicit || pickupMatch.address || '',
-    pickupSource: pickupExplicit ? 'explicit' : (pickupMatch.matched ? 'book' : 'none'),
-    pickupConfidence: pickupExplicit ? 1 : (pickupMatch.confidence || 0),
-    pickupRawText: base.pickupRaw || '',
-    deliveryStation: deliveryExplicit ? stationNameOnly(base.deliveryRaw, deliveryExplicit) : (deliveryMatch.station || base.deliveryRaw || ''),
-    deliveryAddress: deliveryExplicit || deliveryMatch.address || '',
-    deliverySource: deliveryExplicit ? 'explicit' : (deliveryMatch.matched ? 'book' : 'none'),
-    deliveryConfidence: deliveryExplicit ? 1 : (deliveryMatch.confidence || 0),
-    deliveryRawText: base.deliveryRaw || '',
+    pickupMapsLink: pickupLink,
+    deliveryMapsLink: deliveryLink,
     notes: /thumbs up|👍/i.test(fullText) ? 'Acknowledge with 👍' : ''
   };
 
+  if (pickupLink) {
+    // Coordinate-type load: skip fuzzy matching, use the clean site name as-is.
+    fields.pickupStation = pickupRawClean || base.pickupRaw || '';
+    fields.pickupAddress = pickupCoords ? `${pickupCoords.lat}, ${pickupCoords.lon}` : '';
+    fields.pickupSource = pickupCoords ? 'explicit' : 'none';
+    fields.pickupConfidence = pickupCoords ? 1 : 0;
+  } else {
+    fields.pickupStation = pickupExplicit ? stationNameOnly(base.pickupRaw, pickupExplicit) : (pickupMatch.station || base.pickupRaw || '');
+    fields.pickupAddress = pickupExplicit || pickupMatch.address || '';
+    fields.pickupSource = pickupExplicit ? 'explicit' : (pickupMatch.matched ? 'book' : 'none');
+    fields.pickupConfidence = pickupExplicit ? 1 : (pickupMatch.confidence || 0);
+  }
+
+  if (deliveryLink) {
+    fields.deliveryStation = deliveryRawClean || base.deliveryRaw || '';
+    fields.deliveryAddress = deliveryCoords ? `${deliveryCoords.lat}, ${deliveryCoords.lon}` : '';
+    fields.deliverySource = deliveryCoords ? 'explicit' : 'none';
+    fields.deliveryConfidence = deliveryCoords ? 1 : 0;
+  } else {
+    fields.deliveryStation = deliveryExplicit ? stationNameOnly(base.deliveryRaw, deliveryExplicit) : (deliveryMatch.station || base.deliveryRaw || '');
+    fields.deliveryAddress = deliveryExplicit || deliveryMatch.address || '';
+    fields.deliverySource = deliveryExplicit ? 'explicit' : (deliveryMatch.matched ? 'book' : 'none');
+    fields.deliveryConfidence = deliveryExplicit ? 1 : (deliveryMatch.confidence || 0);
+  }
+
   const openMatch = fullText.match(/site opens[^\n]*/i);
   if (openMatch) fields.siteOpens = openMatch[0].trim();
-
-  // Google Maps link handling: a full link's coordinates can be read
-  // instantly straight out of the URL text. A short link's coordinates
-  // can't be read by the app (that requires following a redirect, which
-  // browsers block), but the original link is always passed through to
-  // the driver's message either way, so they can still tap it and
-  // navigate normally on their own phone.
-  const { pickupLink, deliveryLink } = findMapsLinks(fullText);
-  fields.pickupMapsLink = pickupLink;
-  fields.deliveryMapsLink = deliveryLink;
-
-  // Strip the raw link out of the displayed station name — it's already
-  // shown cleanly on its own line, so it shouldn't clutter the site name.
-  if (pickupLink) fields.pickupStation = fields.pickupStation.replace(pickupLink, '').trim() || fields.pickupStation;
-  if (deliveryLink) fields.deliveryStation = fields.deliveryStation.replace(deliveryLink, '').trim() || fields.deliveryStation;
-
-  if (pickupLink) {
-    const coords = extractCoordsFromMapsUrl(pickupLink);
-    if (coords && fields.pickupConfidence < 0.5) {
-      fields.pickupAddress = `${coords.lat}, ${coords.lon}`;
-      fields.pickupSource = 'explicit';
-      fields.pickupConfidence = 1;
-      fields.pickupStation = (base.pickupRaw || '').replace(pickupLink, '').trim() || fields.pickupStation;
-    }
-  }
-  if (deliveryLink) {
-    const coords = extractCoordsFromMapsUrl(deliveryLink);
-    if (coords && fields.deliveryConfidence < 0.5) {
-      fields.deliveryAddress = `${coords.lat}, ${coords.lon}`;
-      fields.deliverySource = 'explicit';
-      fields.deliveryConfidence = 1;
-      fields.deliveryStation = (base.deliveryRaw || '').replace(deliveryLink, '').trim() || fields.deliveryStation;
-    }
-  }
 
   return fields;
 }
@@ -1029,11 +1026,12 @@ function renderFields(){
   ];
 
   grid.innerHTML = rows.map(([key,label,val,source]) => {
+    const isLow = (key.startsWith('pickup') && f.pickupConfidence < 0.5) || (key.startsWith('delivery') && f.deliveryConfidence < 0.5);
     let badge = '';
     if(source === 'explicit') badge = '<span class="badge badge-text">typed in text</span>';
+    else if(source === 'book' && isLow) badge = '<span class="badge badge-review">low confidence — check this</span>';
     else if(source === 'book') badge = '<span class="badge badge-book">matched</span>';
     else if(source === 'none') badge = '<span class="badge badge-review">check this</span>';
-    const isLow = (key.startsWith('pickup') && f.pickupConfidence < 0.5) || (key.startsWith('delivery') && f.deliveryConfidence < 0.5);
     const isAddressField = key === 'pickupAddress' || key === 'deliveryAddress';
     const placeholder = isAddressField ? 'No address? Paste coordinates like 33.2519, -96.5447' : '';
     return `<div class="field">

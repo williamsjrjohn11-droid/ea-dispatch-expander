@@ -688,7 +688,11 @@ function runParse(){
 // word "to" — used to guess whether it's the pickup or delivery location.
 function findMapsLinks(text){
   const regex = /https?:\/\/(?:maps\.app\.goo\.gl|(?:www\.)?google\.com\/maps)\S+/gi;
-  const matches = [...text.matchAll(regex)];
+  const matches = [];
+  let m;
+  while ((m = regex.exec(text)) !== null) {
+    matches.push(m);
+  }
   const toIdx = text.search(/\sto\s/i);
   let pickupLink = null, deliveryLink = null;
   matches.forEach(m => {

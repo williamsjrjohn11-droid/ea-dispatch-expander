@@ -681,6 +681,37 @@ function runParse(){
 // Turns a parsed "base" object (quantity/product/pickupRaw/deliveryRaw/time/
 // dayName/date) into the full currentFields shape used everywhere else in the
 // app — address book matching, explicit-address detection, confidence scoring.
+// ---------- GOOGLE MAPS LINKS (for brand-new facilities with no address) ----------
+
+// Finds a Google Maps link anywhere in the text (short maps.app.goo.gl or
+// full google.com/maps link), and whether it appears before or after the
+// word "to" — used to guess whether it's the pickup or delivery location.
+function findMapsLinks(text){
+  const regex = /https?:\/\/(?:maps\.app\.goo\.gl|(?:www\.)?google\.com\/maps)\S+/gi;
+  const matches = [...text.matchAll(regex)];
+  const toIdx = text.search(/\sto\s/i);
+  let pickupLink = null, deliveryLink = null;
+  matches.forEach(m => {
+    if (toIdx !== -1 && m.index < toIdx) pickupLink = m[0];
+    else deliveryLink = m[0];
+  });
+  return { pickupLink, deliveryLink };
+}
+
+// Pulls lat/lon directly out of a full Google Maps URL — works instantly,
+// no network call, since the coordinates are already visible in the link
+// text itself (e.g. ".../@33.2519,-96.5447,15z" or "!3d33.25!4d-96.54").
+function extractCoordsFromMapsUrl(url){
+  if (!url) return null;
+  let m = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (m) return { lat: parseFloat(m[1]), lon: parseFloat(m[2]) };
+  m = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+  if (m) return { lat: parseFloat(m[1]), lon: parseFloat(m[2]) };
+  m = url.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (m) return { lat: parseFloat(m[1]), lon: parseFloat(m[2]) };
+  return null;
+}
+
 function resolveFields(base, fullText){
   const pickupExplicit = explicitAddress(base.pickupRaw);
   const deliveryExplicit = explicitAddress(base.deliveryRaw);
@@ -706,15 +737,51 @@ function resolveFields(base, fullText){
     pickupAddress: pickupExplicit || pickupMatch.address || '',
     pickupSource: pickupExplicit ? 'explicit' : (pickupMatch.matched ? 'book' : 'none'),
     pickupConfidence: pickupExplicit ? 1 : (pickupMatch.confidence || 0),
+    pickupRawText: base.pickupRaw || '',
     deliveryStation: deliveryExplicit ? stationNameOnly(base.deliveryRaw, deliveryExplicit) : (deliveryMatch.station || base.deliveryRaw || ''),
     deliveryAddress: deliveryExplicit || deliveryMatch.address || '',
     deliverySource: deliveryExplicit ? 'explicit' : (deliveryMatch.matched ? 'book' : 'none'),
     deliveryConfidence: deliveryExplicit ? 1 : (deliveryMatch.confidence || 0),
+    deliveryRawText: base.deliveryRaw || '',
     notes: /thumbs up|👍/i.test(fullText) ? 'Acknowledge with 👍' : ''
   };
 
   const openMatch = fullText.match(/site opens[^\n]*/i);
   if (openMatch) fields.siteOpens = openMatch[0].trim();
+
+  // Google Maps link handling: a full link's coordinates can be read
+  // instantly straight out of the URL text. A short link's coordinates
+  // can't be read by the app (that requires following a redirect, which
+  // browsers block), but the original link is always passed through to
+  // the driver's message either way, so they can still tap it and
+  // navigate normally on their own phone.
+  const { pickupLink, deliveryLink } = findMapsLinks(fullText);
+  fields.pickupMapsLink = pickupLink;
+  fields.deliveryMapsLink = deliveryLink;
+
+  // Strip the raw link out of the displayed station name — it's already
+  // shown cleanly on its own line, so it shouldn't clutter the site name.
+  if (pickupLink) fields.pickupStation = fields.pickupStation.replace(pickupLink, '').trim() || fields.pickupStation;
+  if (deliveryLink) fields.deliveryStation = fields.deliveryStation.replace(deliveryLink, '').trim() || fields.deliveryStation;
+
+  if (pickupLink) {
+    const coords = extractCoordsFromMapsUrl(pickupLink);
+    if (coords && fields.pickupConfidence < 0.5) {
+      fields.pickupAddress = `${coords.lat}, ${coords.lon}`;
+      fields.pickupSource = 'explicit';
+      fields.pickupConfidence = 1;
+      fields.pickupStation = (base.pickupRaw || '').replace(pickupLink, '').trim() || fields.pickupStation;
+    }
+  }
+  if (deliveryLink) {
+    const coords = extractCoordsFromMapsUrl(deliveryLink);
+    if (coords && fields.deliveryConfidence < 0.5) {
+      fields.deliveryAddress = `${coords.lat}, ${coords.lon}`;
+      fields.deliverySource = 'explicit';
+      fields.deliveryConfidence = 1;
+      fields.deliveryStation = (base.deliveryRaw || '').replace(deliveryLink, '').trim() || fields.deliveryStation;
+    }
+  }
 
   return fields;
 }
@@ -755,6 +822,34 @@ function splitProductAndPickup(chunk){
 
 // Parses a single line like "10 - 1" rock Melissa to Celina West." or the
 // older "8 1" Melissa rail to McKinney 5am" style — both work here.
+// Fallback for conversational phrasing where quantity/product land at the
+// END instead of the start — e.g. "Can you do a load from Melissa Rail to
+// [some new job site] 1" Rock 15 loads".
+function parseConversationalLoadLine(line){
+  const m = line.match(/from\s+(.+?)\s+to\s+(.+)$/i);
+  if (!m) return null;
+
+  const pickupRaw = m[1].trim();
+  let tail = m[2].trim();
+
+  const qtyMatch = tail.match(/(\d+)\s*loads?\b/i);
+  if (!qtyMatch) return null; // no quantity found — not this format
+  const quantity = qtyMatch[1];
+  tail = (tail.slice(0, qtyMatch.index) + tail.slice(qtyMatch.index + qtyMatch[0].length)).trim();
+
+  let product = '';
+  const productMatch = tail.match(/(\d+[\/.]?\d*\s*["'’”″′]\s*[\w\s]*)$/);
+  if (productMatch) {
+    product = productMatch[1].trim();
+    tail = tail.slice(0, tail.length - productMatch[0].length).trim();
+  }
+
+  const deliveryRaw = tail.replace(/[.,]+$/, '').trim();
+  if (!pickupRaw || !deliveryRaw) return null;
+
+  return { quantity, product, pickupRaw, deliveryRaw };
+}
+
 function parseLoadLine(rawLine){
   let line = rawLine.trim();
   if (!line) return null;
@@ -766,22 +861,21 @@ function parseLoadLine(rawLine){
   line = line.replace(/\.+$/, '').trim();
 
   const m = line.match(/^(\d+)\s*-?\s*(.+?)\s+to\s+(.+)$/i);
-  if (!m) return null;
+  if (m) {
+    const beforeTo = m[2].trim();
+    const deliveryRaw = m[3].trim();
+    if (beforeTo && deliveryRaw) {
+      const { product, pickupRaw } = splitProductAndPickup(beforeTo);
+      if (pickupRaw) {
+        return { quantity: m[1], product, pickupRaw, deliveryRaw, time };
+      }
+    }
+  }
 
-  const beforeTo = m[2].trim();
-  const deliveryRaw = m[3].trim();
-  if (!beforeTo || !deliveryRaw) return null;
+  const conv = parseConversationalLoadLine(line);
+  if (conv) return { ...conv, time };
 
-  const { product, pickupRaw } = splitProductAndPickup(beforeTo);
-  if (!pickupRaw) return null;
-
-  return {
-    quantity: m[1],
-    product,
-    pickupRaw,
-    deliveryRaw,
-    time
-  };
+  return null;
 }
 
 // Scans every line of the text; only lines that independently match the
@@ -940,10 +1034,12 @@ function renderFields(){
     else if(source === 'book') badge = '<span class="badge badge-book">matched</span>';
     else if(source === 'none') badge = '<span class="badge badge-review">check this</span>';
     const isLow = (key.startsWith('pickup') && f.pickupConfidence < 0.5) || (key.startsWith('delivery') && f.deliveryConfidence < 0.5);
+    const isAddressField = key === 'pickupAddress' || key === 'deliveryAddress';
+    const placeholder = isAddressField ? 'No address? Paste coordinates like 33.2519, -96.5447' : '';
     return `<div class="field">
       <div class="field-label"><span>${label}</span>${badge}</div>
       <input type="text" class="${isLow?'needs-review':''}" value="${(val||'').replace(/"/g,'&quot;')}"
-        oninput="updateField('${key}', this.value)">
+        placeholder="${placeholder}" oninput="updateField('${key}', this.value)">
     </div>`;
   }).join('');
 
@@ -1265,6 +1361,12 @@ function renderDriverMessages(){
     if(f.siteOpens) lines.push(f.siteOpens);
     else if(f.time) lines.push(`Site opens ${f.time}`);
 
+    // Always include the original Google Maps link (short or long) if one
+    // was in the dispatch — the driver's phone resolves it fine even when
+    // this app couldn't extract coordinates from it automatically.
+    if (f.deliveryMapsLink) { lines.push(''); lines.push('Delivery location: ' + f.deliveryMapsLink); }
+    if (f.pickupMapsLink) { lines.push(''); lines.push('Pickup location: ' + f.pickupMapsLink); }
+
     const msg = lines.join('\n');
     const msgId = 'msg_' + d.name.replace(/[^a-z0-9]/gi, '_');
     const smsHref = d.phone ? `sms:${d.phone.replace(/[^\d+]/g,'')}?&body=${encodeURIComponent(msg)}` : null;
@@ -1352,6 +1454,17 @@ const geocodeCache = {};
 
 async function geocodeAddress(address){
   if (geocodeCache[address]) return geocodeCache[address];
+
+  // If the "address" is actually raw coordinates (e.g. copied straight from
+  // Google Maps as "33.2519, -96.5447"), use them directly — no geocoding
+  // needed, and this works for brand-new job sites that don't have a real
+  // street address yet.
+  const coordMatch = address.trim().match(/^(-?\d{1,3}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)$/);
+  if (coordMatch) {
+    const coord = { lat: parseFloat(coordMatch[1]), lon: parseFloat(coordMatch[2]), approximate: false };
+    geocodeCache[address] = coord;
+    return coord;
+  }
 
   // Nominatim (free) doesn't have as rich address-point coverage as Google
   // for small/rural roads. If the exact address fails, fall back to

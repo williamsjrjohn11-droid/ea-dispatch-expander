@@ -264,6 +264,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -290,7 +291,12 @@
       </div>
       <div class="strategy-row" style="margin-bottom:14px;">
         <button class="strategy-btn active" id="reportTabWeek" onclick="switchReportTab('week')">This week</button>
-        <button class="strategy-btn" id="reportTabMonth" onclick="switchReportTab('month')">This month</button>
+        <button class="strategy-btn" id="reportTabMonth" onclick="switchReportTab('month')">By month</button>
+      </div>
+      <input type="month" class="search-input" id="reportMonthPicker" style="display:none;" onchange="handleMonthPickerChange()">
+      <div class="strategy-row" style="margin-bottom:14px;">
+        <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportDriverReportExcel()">📊 Download Excel</button>
+        <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportDriverReportPDF()">🖨️ Download PDF</button>
       </div>
       <div id="driverReportBody"><div class="plan-loading">Loading...</div></div>
     </div>
@@ -304,6 +310,7 @@
       </div>
       <input type="text" class="search-input" id="addrSearch" placeholder="Search by name or address..." oninput="renderAddressBook()">
       <select class="search-input" id="addrCustomerFilter" onchange="renderAddressBook()"></select>
+      <button class="off-toggle" style="background:none; border:none; cursor:pointer; padding:0; color:var(--amber); margin-bottom:14px;" onclick="renameSelectedCustomer()">✏️ Rename the selected customer</button>
 
       <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
         <label style="margin-bottom:8px; display:block;">Add a new location</label>
@@ -455,9 +462,9 @@ const RATE_TABLE = [{"origin": "Amrize: Ambrose", "plant_code": "P4954", "plant_
 // ---------- ADDRESS BOOK VIEWER ----------
 
 function getKnownCustomers(){
-  const set = new Set(['Amrize']); // always present — the built-in book is all Amrize
+  const set = new Set([defaultCustomerLabel]); // always present — the built-in book's current label
   customAddressCache.forEach(c => { if (c.customer) set.add(c.customer); });
-  return Array.from(set).sort((a, b) => a === 'Amrize' ? -1 : b === 'Amrize' ? 1 : a.localeCompare(b));
+  return Array.from(set).sort((a, b) => a === defaultCustomerLabel ? -1 : b === defaultCustomerLabel ? 1 : a.localeCompare(b));
 }
 
 function populateCustomerDropdowns(){
@@ -474,13 +481,39 @@ function populateCustomerDropdowns(){
     '<option value="__new__">+ Add new customer...</option>';
 }
 
+async function renameSelectedCustomer(){
+  const filterSel = document.getElementById('addrCustomerFilter');
+  const oldName = filterSel.value;
+  if (!oldName) {
+    alert('Pick a specific customer from the dropdown first (not "All customers"), then tap Rename.');
+    return;
+  }
+
+  const newName = window.prompt(`Rename "${oldName}" to:`, oldName);
+  if (!newName || !newName.trim() || newName.trim() === oldName) return;
+  const clean = newName.trim();
+
+  try {
+    await fetchBridge('renameCustomer', { oldName, newName: clean });
+
+    if (defaultCustomerLabel === oldName) defaultCustomerLabel = clean;
+    customAddressCache.forEach(c => { if (c.customer === oldName) c.customer = clean; });
+
+    populateCustomerDropdowns();
+    document.getElementById('addrCustomerFilter').value = clean;
+    renderAddressBook();
+  } catch (err) {
+    alert('Could not rename — check your connection and try again.');
+  }
+}
+
 // Lets you type in a brand-new customer name right from the dropdown,
 // instead of being stuck with whatever customers already exist.
 function handleCustomerSelectChange(selectEl){
   if (selectEl.value !== '__new__') return;
   const name = window.prompt('New customer name:');
   if (!name || !name.trim()) {
-    selectEl.value = 'Amrize';
+    selectEl.value = defaultCustomerLabel;
     return;
   }
   const clean = name.trim();
@@ -507,12 +540,12 @@ function getUniqueLocations(){
   const seen = new Map();
   ADDRESS_BOOK.forEach(row => {
     const pKey = row['Shipping Station'] + '|' + row['Shipping Address'];
-    if (!seen.has(pKey)) seen.set(pKey, { name: row['Shipping Station'], address: row['Shipping Address'], customer: 'Amrize' });
+    if (!seen.has(pKey)) seen.set(pKey, { name: row['Shipping Station'], address: row['Shipping Address'], customer: defaultCustomerLabel });
     const dKey = row['Amrize RMX Plant Name'] + '|' + row['Destination Address'];
-    if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'], customer: 'Amrize' });
+    if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'], customer: defaultCustomerLabel });
   });
   customAddressCache.forEach(c => {
-    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, customer: c.customer || 'Amrize', custom: true });
+    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, customer: c.customer || defaultCustomerLabel, custom: true });
   });
   return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -579,11 +612,13 @@ function escapeHtmlSafe(s){
 }
 
 let customAddressCache = [];
+let defaultCustomerLabel = 'Amrize'; // the display name for the built-in book — renamable
 
 async function loadCustomAddresses(){
   try {
     const data = await fetchBridge('getCustomAddresses');
     customAddressCache = data.addresses || [];
+    defaultCustomerLabel = data.defaultLabel || 'Amrize';
   } catch (e) {
     customAddressCache = [];
   }
@@ -2189,24 +2224,50 @@ function getMonday(date){
 
 async function openDriverReport(){
   document.getElementById('driverReportModal').classList.add('show');
+
+  const today = new Date();
+  const currentMonthValue = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
+  const monthPicker = document.getElementById('reportMonthPicker');
+  monthPicker.max = currentMonthValue;
+  if (!monthPicker.value) monthPicker.value = currentMonthValue;
+
+  await loadDriverReportData();
+}
+
+async function handleMonthPickerChange(){
+  currentReportTab = 'month';
+  document.getElementById('reportTabWeek').classList.remove('active');
+  document.getElementById('reportTabMonth').classList.add('active');
+  await loadDriverReportData();
+}
+
+async function loadDriverReportData(){
   const bodyEl = document.getElementById('driverReportBody');
   bodyEl.innerHTML = '<div class="plan-loading">Loading real numbers from LoadTracker...</div>';
 
   try {
     const today = new Date();
     const todayKey = formatDateKey(today);
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
     const weekStart = getMonday(today);
-    const rangeStart = weekStart < monthStart ? weekStart : monthStart;
+    const weekStartKey = formatDateKey(weekStart);
+
+    const monthPicker = document.getElementById('reportMonthPicker');
+    const [selYear, selMonth] = monthPicker.value.split('-').map(Number);
+    const selMonthStart = new Date(selYear, selMonth - 1, 1);
+    const selMonthEnd = new Date(selYear, selMonth, 0); // last calendar day of the selected month
+    const selMonthStartKey = formatDateKey(selMonthStart);
+    const selMonthEndKey = formatDateKey(selMonthEnd);
+
+    // One fetch wide enough to cover both the current week and whichever
+    // month is selected (they may not overlap if browsing a past month).
+    const rangeStart = weekStart < selMonthStart ? weekStart : selMonthStart;
+    const rangeEndKey = selMonthEndKey > todayKey ? todayKey : selMonthEndKey;
 
     const data = await fetchBridge('getCompletion', {
       startDate: formatDateKey(rangeStart),
-      endDate: todayKey
+      endDate: rangeEndKey
     });
     const counts = data.completion || {};
-
-    const monthStartKey = formatDateKey(monthStart);
-    const weekStartKey = formatDateKey(weekStart);
 
     const byDriver = {};
     driversCache.forEach(d => { byDriver[d.name] = { today: 0, week: 0, month: 0, daysWorked: new Set() }; });
@@ -2216,12 +2277,13 @@ async function openDriverReport(){
       const driver = key.slice(0, sep);
       const dateKey = key.slice(sep + 1);
       if (!byDriver[driver]) byDriver[driver] = { today: 0, week: 0, month: 0, daysWorked: new Set() };
-      if (dateKey >= monthStartKey) { byDriver[driver].month += count; byDriver[driver].daysWorked.add(dateKey); }
+      if (dateKey >= selMonthStartKey && dateKey <= selMonthEndKey) { byDriver[driver].month += count; byDriver[driver].daysWorked.add(dateKey); }
       if (dateKey >= weekStartKey) byDriver[driver].week += count;
       if (dateKey === todayKey) byDriver[driver].today += count;
     });
 
-    // Fleet average pace (loads per day actually worked this month), used to suggest ratings
+    // Fleet average pace (loads per day actually worked in the selected
+    // month), used to suggest ratings.
     const paces = [];
     Object.values(byDriver).forEach(v => {
       if (v.daysWorked.size > 0) paces.push(v.month / v.daysWorked.size);
@@ -2234,7 +2296,10 @@ async function openDriverReport(){
       v.daysWorked = v.daysWorked.size;
     });
 
-    reportCache = { byDriver, fleetAvg };
+    reportCache = {
+      byDriver, fleetAvg,
+      monthLabel: selMonthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    };
     renderDriverReport();
   } catch (err) {
     bodyEl.innerHTML = `<div class="empty-hint">Could not load report — ${escapeHtmlSafe(err.message)}</div>`;
@@ -2245,6 +2310,7 @@ function switchReportTab(tab){
   currentReportTab = tab;
   document.getElementById('reportTabWeek').classList.toggle('active', tab === 'week');
   document.getElementById('reportTabMonth').classList.toggle('active', tab === 'month');
+  document.getElementById('reportMonthPicker').style.display = tab === 'month' ? 'block' : 'none';
   renderDriverReport();
 }
 
@@ -2288,7 +2354,7 @@ function renderDriverReport(){
       <div class="report-row">
         <div class="report-name">${escapeHtmlSafe(d.name)}</div>
         <div class="report-stat"><span class="report-stat-label">Today</span>${stats.today}</div>
-        <div class="report-stat"><span class="report-stat-label">${currentReportTab === 'week' ? 'This week' : 'This month'}</span>${mainStat}</div>
+        <div class="report-stat"><span class="report-stat-label">${currentReportTab === 'week' ? 'This week' : escapeHtmlSafe(reportCache.monthLabel || 'This month')}</span>${mainStat}</div>
         <div class="report-stat">${suggestionHtml}</div>
       </div>
     `;
@@ -2298,7 +2364,7 @@ function renderDriverReport(){
     <div class="report-head-row">
       <div class="report-name">Driver</div>
       <div class="report-stat report-stat-label">Today</div>
-      <div class="report-stat report-stat-label">${currentReportTab === 'week' ? 'This week' : 'This month'}</div>
+      <div class="report-stat report-stat-label">${currentReportTab === 'week' ? 'This week' : escapeHtmlSafe(reportCache.monthLabel || 'This month')}</div>
       <div class="report-stat report-stat-label">Suggested rating</div>
     </div>
     ${rows}
@@ -2316,6 +2382,86 @@ async function applySuggestedRating(driverName, rating){
   } catch (err) {
     alert('Could not save rating — check your connection and try again.');
   }
+}
+
+// ---------- DRIVER REPORT EXPORTS ----------
+
+function driverReportRows(){
+  const periodLabel = currentReportTab === 'week' ? 'This Week' : (reportCache && reportCache.monthLabel ? reportCache.monthLabel : 'This Month');
+  const rows = driversCache.map(d => {
+    const stats = (reportCache && reportCache.byDriver[d.name]) || { today: 0, week: 0, month: 0 };
+    const mainStat = currentReportTab === 'week' ? stats.week : stats.month;
+    return {
+      driver: d.name,
+      today: stats.today,
+      periodValue: mainStat,
+      rating: d.rating || 3
+    };
+  });
+  return { periodLabel, rows };
+}
+
+function exportDriverReportExcel(){
+  if (!reportCache) { alert('Load the report first before exporting.'); return; }
+  if (typeof XLSX === 'undefined') { alert('Excel export isn\'t available right now — check your connection and try again.'); return; }
+
+  const { periodLabel, rows } = driverReportRows();
+  const sheetData = rows.map(r => ({
+    'Driver': r.driver,
+    'Today': r.today,
+    [periodLabel]: r.periodValue,
+    'Current Rating': r.rating
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(sheetData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Driver Report');
+  const safeLabel = periodLabel.replace(/[^a-z0-9]+/gi, '_');
+  XLSX.writeFile(wb, `EA_Driver_Report_${safeLabel}.xlsx`);
+}
+
+function exportDriverReportPDF(){
+  if (!reportCache) { alert('Load the report first before exporting.'); return; }
+
+  const { periodLabel, rows } = driverReportRows();
+  const rowsHtml = rows.map(r => `
+    <tr>
+      <td>${escapeHtmlSafe(r.driver)}</td>
+      <td>${r.today}</td>
+      <td>${r.periodValue}</td>
+      <td>${r.rating}</td>
+    </tr>
+  `).join('');
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) { alert('Could not open the print preview — check that popups are allowed for this site.'); return; }
+
+  printWindow.document.write(`
+    <html>
+    <head>
+      <title>EA Driver Report — ${escapeHtmlSafe(periodLabel)}</title>
+      <style>
+        body{ font-family: Arial, Helvetica, sans-serif; padding:24px; color:#111; }
+        h1{ font-size:18px; margin-bottom:2px; }
+        h2{ font-size:13px; color:#555; font-weight:normal; margin-top:0; }
+        table{ width:100%; border-collapse:collapse; margin-top:16px; }
+        th, td{ border:1px solid #ccc; padding:8px 10px; text-align:left; font-size:13px; }
+        th{ background:#f0f0f0; }
+      </style>
+    </head>
+    <body>
+      <h1>Earth Angels Express — Driver Report</h1>
+      <h2>${escapeHtmlSafe(periodLabel)} · generated ${new Date().toLocaleString()}</h2>
+      <table>
+        <tr><th>Driver</th><th>Today</th><th>${escapeHtmlSafe(periodLabel)}</th><th>Current Rating</th></tr>
+        ${rowsHtml}
+      </table>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.focus();
+  setTimeout(() => printWindow.print(), 300);
 }
 
 async function checkCompletion(){

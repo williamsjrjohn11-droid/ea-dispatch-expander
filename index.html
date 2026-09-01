@@ -303,11 +303,20 @@
         <button class="modal-close" onclick="closeModal('addressBookModal')">Close</button>
       </div>
       <input type="text" class="search-input" id="addrSearch" placeholder="Search by name or address..." oninput="renderAddressBook()">
+      <select class="search-input" id="addrCustomerFilter" onchange="renderAddressBook()">
+        <option value="">All customers</option>
+        <option value="Amrize">Amrize</option>
+        <option value="Preferred">Preferred</option>
+      </select>
 
       <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
         <label style="margin-bottom:8px; display:block;">Add a new location</label>
         <input type="text" class="search-input" id="newAddrName" placeholder="Location name (e.g. LH Lacy J# 6056 The Cottages)" style="margin-bottom:8px;">
         <input type="text" class="search-input" id="newAddrValue" placeholder="Address, or coordinates like 33.2519, -96.5447" style="margin-bottom:8px;">
+        <select class="search-input" id="newAddrCustomer" style="margin-bottom:8px;">
+          <option value="Amrize">Amrize</option>
+          <option value="Preferred">Preferred</option>
+        </select>
         <button class="btn-secondary" onclick="addNewCustomAddress()">+ Add to address book</button>
         <div id="newAddrStatus" class="tonnage-hint"></div>
       </div>
@@ -467,12 +476,12 @@ function getUniqueLocations(){
   const seen = new Map();
   ADDRESS_BOOK.forEach(row => {
     const pKey = row['Shipping Station'] + '|' + row['Shipping Address'];
-    if (!seen.has(pKey)) seen.set(pKey, { name: row['Shipping Station'], address: row['Shipping Address'] });
+    if (!seen.has(pKey)) seen.set(pKey, { name: row['Shipping Station'], address: row['Shipping Address'], customer: 'Amrize' });
     const dKey = row['Amrize RMX Plant Name'] + '|' + row['Destination Address'];
-    if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'] });
+    if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'], customer: 'Amrize' });
   });
   customAddressCache.forEach(c => {
-    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, custom: true });
+    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, customer: c.customer || 'Amrize', custom: true });
   });
   return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -480,9 +489,11 @@ function getUniqueLocations(){
 async function addNewCustomAddress(){
   const nameInput = document.getElementById('newAddrName');
   const valueInput = document.getElementById('newAddrValue');
+  const customerSelect = document.getElementById('newAddrCustomer');
   const statusEl = document.getElementById('newAddrStatus');
   const name = nameInput.value.trim();
   const value = valueInput.value.trim();
+  const customer = customerSelect.value;
 
   if (!name || !value) {
     statusEl.textContent = 'Enter both a name and an address (or coordinates).';
@@ -491,14 +502,14 @@ async function addNewCustomAddress(){
 
   statusEl.textContent = 'Saving...';
   try {
-    await fetchBridge('saveCustomAddress', { stationName: name, address: value });
+    await fetchBridge('saveCustomAddress', { stationName: name, address: value, customer });
     const existing = customAddressCache.find(c => c.station_name.toLowerCase() === name.toLowerCase());
-    if (existing) existing.address = value;
-    else customAddressCache.push({ station_name: name, address: value });
+    if (existing) { existing.address = value; existing.customer = customer; }
+    else customAddressCache.push({ station_name: name, address: value, customer });
 
     nameInput.value = '';
     valueInput.value = '';
-    statusEl.textContent = '✓ Added — future dispatches mentioning this name will auto-match.';
+    statusEl.textContent = `✓ Added to ${customer} — future dispatches mentioning this name will auto-match.`;
     renderAddressBook();
   } catch (err) {
     statusEl.textContent = 'Could not save — check your connection and try again.';
@@ -507,9 +518,12 @@ async function addNewCustomAddress(){
 
 function renderAddressBook(){
   const query = (document.getElementById('addrSearch').value || '').toLowerCase().trim();
-  const list = getUniqueLocations().filter(loc =>
-    !query || loc.name.toLowerCase().includes(query) || loc.address.toLowerCase().includes(query)
-  );
+  const customerFilter = document.getElementById('addrCustomerFilter').value;
+  const list = getUniqueLocations().filter(loc => {
+    const matchesQuery = !query || loc.name.toLowerCase().includes(query) || loc.address.toLowerCase().includes(query);
+    const matchesCustomer = !customerFilter || loc.customer === customerFilter;
+    return matchesQuery && matchesCustomer;
+  });
   const container = document.getElementById('addrBookList');
   if (list.length === 0) {
     container.innerHTML = '<div class="empty-hint">No matches found.</div>';
@@ -517,7 +531,7 @@ function renderAddressBook(){
   }
   container.innerHTML = list.map(loc => `
     <div class="addr-entry">
-      <div class="addr-name">${escapeHtmlSafe(loc.name)}${loc.custom ? ' <span class="badge badge-text" style="font-size:9px;">custom</span>' : ''}</div>
+      <div class="addr-name">${escapeHtmlSafe(loc.name)} <span class="badge badge-text" style="font-size:9px;">${escapeHtmlSafe(loc.customer)}</span></div>
       <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
     </div>
   `).join('');

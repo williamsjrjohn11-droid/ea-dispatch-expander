@@ -303,20 +303,13 @@
         <button class="modal-close" onclick="closeModal('addressBookModal')">Close</button>
       </div>
       <input type="text" class="search-input" id="addrSearch" placeholder="Search by name or address..." oninput="renderAddressBook()">
-      <select class="search-input" id="addrCustomerFilter" onchange="renderAddressBook()">
-        <option value="">All customers</option>
-        <option value="Amrize">Amrize</option>
-        <option value="Preferred">Preferred</option>
-      </select>
+      <select class="search-input" id="addrCustomerFilter" onchange="renderAddressBook()"></select>
 
       <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
         <label style="margin-bottom:8px; display:block;">Add a new location</label>
         <input type="text" class="search-input" id="newAddrName" placeholder="Location name (e.g. LH Lacy J# 6056 The Cottages)" style="margin-bottom:8px;">
         <input type="text" class="search-input" id="newAddrValue" placeholder="Address, or coordinates like 33.2519, -96.5447" style="margin-bottom:8px;">
-        <select class="search-input" id="newAddrCustomer" style="margin-bottom:8px;">
-          <option value="Amrize">Amrize</option>
-          <option value="Preferred">Preferred</option>
-        </select>
+        <select class="search-input" id="newAddrCustomer" style="margin-bottom:8px;" onchange="handleCustomerSelectChange(this)"></select>
         <button class="btn-secondary" onclick="addNewCustomAddress()">+ Add to address book</button>
         <div id="newAddrStatus" class="tonnage-hint"></div>
       </div>
@@ -461,8 +454,46 @@ const RATE_TABLE = [{"origin": "Amrize: Ambrose", "plant_code": "P4954", "plant_
 
 // ---------- ADDRESS BOOK VIEWER ----------
 
+function getKnownCustomers(){
+  const set = new Set(['Amrize']); // always present — the built-in book is all Amrize
+  customAddressCache.forEach(c => { if (c.customer) set.add(c.customer); });
+  return Array.from(set).sort((a, b) => a === 'Amrize' ? -1 : b === 'Amrize' ? 1 : a.localeCompare(b));
+}
+
+function populateCustomerDropdowns(){
+  const customers = getKnownCustomers();
+
+  const filterSel = document.getElementById('addrCustomerFilter');
+  const prevFilterVal = filterSel.value;
+  filterSel.innerHTML = '<option value="">All customers</option>' +
+    customers.map(c => `<option value="${escapeHtmlSafe(c)}">${escapeHtmlSafe(c)}</option>`).join('');
+  filterSel.value = customers.includes(prevFilterVal) ? prevFilterVal : '';
+
+  const addSel = document.getElementById('newAddrCustomer');
+  addSel.innerHTML = customers.map(c => `<option value="${escapeHtmlSafe(c)}">${escapeHtmlSafe(c)}</option>`).join('') +
+    '<option value="__new__">+ Add new customer...</option>';
+}
+
+// Lets you type in a brand-new customer name right from the dropdown,
+// instead of being stuck with whatever customers already exist.
+function handleCustomerSelectChange(selectEl){
+  if (selectEl.value !== '__new__') return;
+  const name = window.prompt('New customer name:');
+  if (!name || !name.trim()) {
+    selectEl.value = 'Amrize';
+    return;
+  }
+  const clean = name.trim();
+  const opt = document.createElement('option');
+  opt.value = clean;
+  opt.textContent = clean;
+  selectEl.insertBefore(opt, selectEl.lastElementChild);
+  selectEl.value = clean;
+}
+
 function openAddressBook(){
   document.getElementById('addressBookModal').classList.add('show');
+  populateCustomerDropdowns();
   renderAddressBook();
 }
 function openHelp(){
@@ -499,6 +530,10 @@ async function addNewCustomAddress(){
     statusEl.textContent = 'Enter both a name and an address (or coordinates).';
     return;
   }
+  if (customer === '__new__') {
+    statusEl.textContent = 'Pick or type a customer name first.';
+    return;
+  }
 
   statusEl.textContent = 'Saving...';
   try {
@@ -510,6 +545,8 @@ async function addNewCustomAddress(){
     nameInput.value = '';
     valueInput.value = '';
     statusEl.textContent = `✓ Added to ${customer} — future dispatches mentioning this name will auto-match.`;
+    populateCustomerDropdowns();
+    document.getElementById('newAddrCustomer').value = customer;
     renderAddressBook();
   } catch (err) {
     statusEl.textContent = 'Could not save — check your connection and try again.';

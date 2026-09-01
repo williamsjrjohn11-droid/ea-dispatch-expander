@@ -487,12 +487,67 @@ function escapeHtmlSafe(s){
   return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+let customAddressCache = [];
+
+async function loadCustomAddresses(){
+  try {
+    const data = await fetchBridge('getCustomAddresses');
+    customAddressCache = data.addresses || [];
+  } catch (e) {
+    customAddressCache = [];
+  }
+}
+
+// Saves a corrected address for a site name so future dispatches to the
+// same place auto-match. Called from the "Save this address" button next
+// to a low-confidence field.
+async function saveAddressForNextTime(fieldPrefix){
+  const f = currentFields;
+  const stationName = fieldPrefix === 'pickup' ? f.pickupStation : f.deliveryStation;
+  const address = fieldPrefix === 'pickup' ? f.pickupAddress : f.deliveryAddress;
+
+  if (!stationName || !address) {
+    alert('Fill in both the location name and the address/coordinates before saving.');
+    return;
+  }
+
+  try {
+    await fetchBridge('saveCustomAddress', { stationName, address });
+    const existing = customAddressCache.find(c => c.station_name.toLowerCase() === stationName.toLowerCase());
+    if (existing) existing.address = address;
+    else customAddressCache.push({ station_name: stationName, address });
+
+    if (fieldPrefix === 'pickup') { f.pickupSource = 'book'; f.pickupConfidence = 1; }
+    else { f.deliverySource = 'book'; f.deliveryConfidence = 1; }
+    renderFields();
+    renderOutput();
+
+    const flag = document.getElementById('copiedFlag');
+    flag.textContent = '✓ Saved — future dispatches to this location will auto-match';
+    flag.classList.add('show');
+    setTimeout(() => { flag.classList.remove('show'); flag.textContent = 'Copied!'; }, 2500);
+  } catch (err) {
+    alert('Could not save — check your connection and try again.');
+  }
+}
+
 function normalize(str){
   return (str || '').toUpperCase().replace(/[.,#"'’”″′]/g,'').replace(/\s+/g,' ').trim();
 }
 
 function matchLocation(text){
   const norm = normalize(text);
+
+  // Check your own saved corrections first — an exact match here is fully
+  // trusted (confidence 1), since you explicitly confirmed this address for
+  // this exact site name. Kept separate from the fuzzy word-overlap check
+  // below to avoid the same kind of false-positive that built-in book
+  // entries can produce on a partial word match.
+  const customMatch = customAddressCache.find(c => normalize(c.station_name) === norm);
+  if (customMatch) {
+    return { matched: true, station: customMatch.station_name, address: customMatch.address, confidence: 1 };
+  }
+
   const words = norm.split(' ').filter(w => w.length > 2);
   let best = null, bestScore = 0;
   ADDRESS_BOOK.forEach(row => {
@@ -1038,19 +1093,38 @@ function renderFields(){
     else if(source === 'none') badge = '<span class="badge badge-review">check this</span>';
     const isAddressField = key === 'pickupAddress' || key === 'deliveryAddress';
     const placeholder = isAddressField ? 'No address? Paste coordinates like 33.2519, -96.5447' : '';
+    const fieldPrefix = key.startsWith('pickup') ? 'pickup' : 'delivery';
+    const showSaveBtn = isAddressField && isLow && val;
     return `<div class="field">
       <div class="field-label"><span>${label}</span>${badge}</div>
       <input type="text" class="${isLow?'needs-review':''}" value="${(val||'').replace(/"/g,'&quot;')}"
         placeholder="${placeholder}" oninput="updateField('${key}', this.value)">
+      ${isAddressField ? `<div id="saveBtnContainer_${fieldPrefix}">${showSaveBtn ? saveButtonHtml(fieldPrefix) : ''}</div>` : ''}
     </div>`;
   }).join('');
 
   document.getElementById('fieldsPanel').style.display = 'block';
 }
 
+function saveButtonHtml(fieldPrefix){
+  return `<button class="off-toggle" style="margin-top:6px; background:none; border:none; cursor:pointer; padding:0; color:var(--amber); display:block;" onclick="saveAddressForNextTime('${fieldPrefix}')">💾 Save this address — auto-match it next time</button>`;
+}
+
 function updateField(key, value){
   currentFields[key] = value;
   renderOutput();
+
+  // Toggle the Save button for the relevant field WITHOUT rebuilding the
+  // whole grid — a full re-render would tear down the input mid-typing and
+  // steal focus/cursor position from whichever box the person is in.
+  if (key === 'pickupAddress' || key === 'deliveryAddress') {
+    const fieldPrefix = key === 'pickupAddress' ? 'pickup' : 'delivery';
+    const confidence = fieldPrefix === 'pickup' ? currentFields.pickupConfidence : currentFields.deliveryConfidence;
+    const container = document.getElementById('saveBtnContainer_' + fieldPrefix);
+    if (container) {
+      container.innerHTML = (confidence < 0.5 && value) ? saveButtonHtml(fieldPrefix) : '';
+    }
+  }
 }
 
 function renderOutput(){
@@ -1446,6 +1520,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const dateInput = document.getElementById('completionDate');
   if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
   refreshDrivers();
+  loadCustomAddresses();
 });
 
 // ---------- ROUTE & STRATEGIC PLAN ----------

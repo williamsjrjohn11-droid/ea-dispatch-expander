@@ -303,6 +303,15 @@
         <button class="modal-close" onclick="closeModal('addressBookModal')">Close</button>
       </div>
       <input type="text" class="search-input" id="addrSearch" placeholder="Search by name or address..." oninput="renderAddressBook()">
+
+      <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
+        <label style="margin-bottom:8px; display:block;">Add a new location</label>
+        <input type="text" class="search-input" id="newAddrName" placeholder="Location name (e.g. LH Lacy J# 6056 The Cottages)" style="margin-bottom:8px;">
+        <input type="text" class="search-input" id="newAddrValue" placeholder="Address, or coordinates like 33.2519, -96.5447" style="margin-bottom:8px;">
+        <button class="btn-secondary" onclick="addNewCustomAddress()">+ Add to address book</button>
+        <div id="newAddrStatus" class="tonnage-hint"></div>
+      </div>
+
       <div id="addrBookList"></div>
     </div>
   </div>
@@ -462,7 +471,38 @@ function getUniqueLocations(){
     const dKey = row['Amrize RMX Plant Name'] + '|' + row['Destination Address'];
     if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'] });
   });
+  customAddressCache.forEach(c => {
+    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, custom: true });
+  });
   return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function addNewCustomAddress(){
+  const nameInput = document.getElementById('newAddrName');
+  const valueInput = document.getElementById('newAddrValue');
+  const statusEl = document.getElementById('newAddrStatus');
+  const name = nameInput.value.trim();
+  const value = valueInput.value.trim();
+
+  if (!name || !value) {
+    statusEl.textContent = 'Enter both a name and an address (or coordinates).';
+    return;
+  }
+
+  statusEl.textContent = 'Saving...';
+  try {
+    await fetchBridge('saveCustomAddress', { stationName: name, address: value });
+    const existing = customAddressCache.find(c => c.station_name.toLowerCase() === name.toLowerCase());
+    if (existing) existing.address = value;
+    else customAddressCache.push({ station_name: name, address: value });
+
+    nameInput.value = '';
+    valueInput.value = '';
+    statusEl.textContent = '✓ Added — future dispatches mentioning this name will auto-match.';
+    renderAddressBook();
+  } catch (err) {
+    statusEl.textContent = 'Could not save — check your connection and try again.';
+  }
 }
 
 function renderAddressBook(){
@@ -477,7 +517,7 @@ function renderAddressBook(){
   }
   container.innerHTML = list.map(loc => `
     <div class="addr-entry">
-      <div class="addr-name">${escapeHtmlSafe(loc.name)}</div>
+      <div class="addr-name">${escapeHtmlSafe(loc.name)}${loc.custom ? ' <span class="badge badge-text" style="font-size:9px;">custom</span>' : ''}</div>
       <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
     </div>
   `).join('');

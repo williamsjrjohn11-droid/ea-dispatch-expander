@@ -269,6 +269,15 @@
   .plan-table tbody tr:nth-child(even){ background:rgba(255,255,255,.03); }
   .plan-table tfoot td{ font-weight:700; background:var(--panel2); color:var(--text); }
   .plan-table td.plan-empty{ color:var(--text3); }
+  .plan-cell-input{ width:100%; min-width:60px; background:transparent; border:1px solid transparent; border-radius:4px; color:var(--text); text-align:center; font-size:12px; padding:3px 4px; font-family:inherit; }
+  .plan-cell-input:hover, .plan-cell-input:focus{ border-color:var(--border2); background:var(--panel2); outline:none; }
+  .plan-table td.plan-site-cell .plan-cell-input{ text-align:left; }
+  .plan-add-driver-select{ width:100%; background:var(--panel2); border:1px dashed var(--border2); border-radius:4px; color:var(--text-dim); font-size:11px; padding:3px; }
+  .plan-computed{ color:var(--text-dim); }
+  .plan-add-row-cell{ text-align:left; padding:8px; }
+  .plan-daily-goal{ font-weight:700; }
+  .plan-daily-goal.met{ color:var(--green); }
+  .plan-daily-goal.short{ color:var(--amber); }
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -320,17 +329,8 @@
       </div>
 
       <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
-        <label style="margin-bottom:8px; display:block;">Add a planned load</label>
-        <input type="date" class="search-input" id="planDate" style="margin-bottom:8px;">
-        <select class="search-input" id="planDriver" style="margin-bottom:8px;"></select>
-        <input type="text" class="search-input" id="planSite" placeholder="Site (e.g. 6 1&quot; Melissa rail to Plano)" style="margin-bottom:8px;">
-        <input type="text" class="search-input" id="planCompany" placeholder="Company (e.g. Amrize)" style="margin-bottom:8px;">
-        <input type="number" class="search-input" id="planLoadsToGive" placeholder="Loads to give" style="margin-bottom:8px;">
-        <input type="number" step="0.01" class="search-input" id="planRatePerTon" placeholder="Rate per ton ($)" style="margin-bottom:8px;">
-        <input type="number" step="0.01" class="search-input" id="planTonsPerLoad" placeholder="Tons per load (default 25)" style="margin-bottom:8px;">
-        <input type="number" step="0.01" class="search-input" id="planWeeksFsc" placeholder="Weeks FSC (optional)" style="margin-bottom:8px;">
-        <button class="btn-secondary" onclick="addPlannedLoad()">+ Add planned load</button>
-        <div id="planAddStatus" class="tonnage-hint"></div>
+        <label style="margin-bottom:8px; display:block;">Add a driver to a row</label>
+        <div class="tonnage-hint">Type directly into the grid below. Tap "+ Add row" for a new entry, and use each row's "+ driver" cell to bring a driver into that row and type their loads.</div>
       </div>
 
       <div class="strategy-row" style="margin-bottom:14px;">
@@ -338,6 +338,7 @@
         <input type="date" class="search-input" id="planFilterEnd" onchange="loadDispatchPlanData()">
       </div>
       <div class="strategy-row" style="margin-bottom:14px;">
+        <button class="btn-secondary" style="flex:1; margin:0;" onclick="addDraftRow()">+ Add row</button>
         <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportPlanExcel()">📊 Download Excel</button>
         <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportPlanPDF()">🖨️ Download PDF</button>
       </div>
@@ -2512,9 +2513,15 @@ function exportDriverReportPDF(){
 }
 
 // ---------- DISPATCH PLANNING ----------
+// Editable spreadsheet-style grid: you type loads/site/rate directly into
+// the grid, then bring a driver into a row via its "+ driver" cell and type
+// how many loads they're getting. Completed / Completed $ are never typed in
+// — they're pulled live from the real Tickets data once tickets are scanned
+// into LoadTracker, same as the rest of this app.
 
-let planCache = []; // planned load rows for the current filter range
+let planCache = []; // saved planned-load rows (from the backend) for the current filter range
 let planCompletionCache = {}; // "driver|date" -> {count, dollars, pending}
+let planDraftGroups = []; // rows added via "+ Add row" that have no saved data yet
 
 function fmtMoney(n){
   return '$' + (Math.round((n || 0) * 100) / 100).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -2531,51 +2538,8 @@ async function openDispatchPlan(){
     startEl.value = formatDateKey(monday);
     endEl.value = formatDateKey(sunday);
   }
-  if (!document.getElementById('planDate').value) {
-    document.getElementById('planDate').value = formatDateKey(new Date());
-  }
-
-  const driverSel = document.getElementById('planDriver');
-  driverSel.innerHTML = driversCache.map(d => `<option value="${escapeHtmlSafe(d.name)}">${escapeHtmlSafe(d.name)}</option>`).join('');
 
   await loadDispatchPlanData();
-}
-
-async function addPlannedLoad(){
-  const statusEl = document.getElementById('planAddStatus');
-  const payload = {
-    date: document.getElementById('planDate').value,
-    driver: document.getElementById('planDriver').value,
-    site: document.getElementById('planSite').value.trim(),
-    company: document.getElementById('planCompany').value.trim(),
-    loads_to_give: document.getElementById('planLoadsToGive').value,
-    rate_per_ton: document.getElementById('planRatePerTon').value,
-    tons_per_load: document.getElementById('planTonsPerLoad').value || 25,
-    weeks_fsc: document.getElementById('planWeeksFsc').value || 0
-  };
-  if (!payload.date || !payload.driver || !payload.loads_to_give || !payload.rate_per_ton) {
-    statusEl.textContent = 'Date, driver, loads to give, and rate per ton are required.';
-    return;
-  }
-  statusEl.textContent = 'Saving...';
-  try {
-    await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
-    statusEl.textContent = 'Saved.';
-    ['planSite','planCompany','planLoadsToGive','planRatePerTon','planTonsPerLoad','planWeeksFsc'].forEach(id => document.getElementById(id).value = '');
-    await loadDispatchPlanData();
-  } catch (err) {
-    statusEl.textContent = 'Could not save — ' + escapeHtmlSafe(err.message);
-  }
-}
-
-async function deletePlannedLoadUI(planId){
-  if (!confirm('Delete this planned load?')) return;
-  try {
-    await fetchBridge('deletePlannedLoad', { planId });
-    await loadDispatchPlanData();
-  } catch (err) {
-    alert('Could not delete — ' + err.message);
-  }
 }
 
 async function loadDispatchPlanData(){
@@ -2589,8 +2553,6 @@ async function loadDispatchPlanData(){
   if (!startDate || !endDate) return;
 
   try {
-    // Pull an extra 28 days back for the projection's trailing average,
-    // in addition to whatever range is being reviewed.
     const rangeStartDate = new Date(startDate);
     const projLookback = new Date(rangeStartDate);
     projLookback.setDate(projLookback.getDate() - 28);
@@ -2602,6 +2564,9 @@ async function loadDispatchPlanData(){
     ]);
     planCache = planData.plans || [];
     planCompletionCache = compData.completion || {};
+    // Drop drafts that now exist for real (matched by date+site+company)
+    const realKeys = new Set(planCache.map(p => [p.date, p.site, p.company].join('||')));
+    planDraftGroups = planDraftGroups.filter(g => !realKeys.has([g.date, g.site, g.company].join('||')));
 
     renderPlanDashboard(startDate, endDate);
     renderPlanProjection();
@@ -2615,128 +2580,180 @@ function planRowsInRange(startDate, endDate){
   return planCache.filter(p => p.date >= startDate && p.date <= endDate);
 }
 
-// Builds the spreadsheet-style pivot: one row per (date, site, company) entry,
-// with a set of columns per driver (Assigned / Completed / Issued $ / Completed $),
-// same shape as the "TODAY'S TOTALS" / History layout in the old Excel tracker.
-// Completed/Completed $ come from real Tickets data at the driver+date level;
-// when a driver has more than one entry on the same date, that driver's daily
-// completed count/$ is split across those entries in proportion to how many
-// loads were assigned on each — an approximation, noted under the table.
-function planPivotData(startDate, endDate){
+// Builds the editable grid model: one entry per (date, site, company), each
+// holding its shared fields plus a map of driver -> { plan_id, loads_to_give }.
+// Completed/Completed $ are computed separately at render time from
+// planCompletionCache, never stored on the group itself.
+function buildPlanGroups(startDate, endDate){
   const rows = planRowsInRange(startDate, endDate);
-
-  // Driver+date totals, for proportional splitting when a driver has
-  // multiple entries on the same day.
-  const driverDayAssigned = {};
-  rows.forEach(p => {
-    const key = p.driver + '|' + p.date;
-    driverDayAssigned[key] = (driverDayAssigned[key] || 0) + (Number(p.loads_to_give) || 0);
-  });
-
-  // Driver column order: roster order first, then any names not in the
-  // current roster (e.g. a driver who's since left) at the end.
-  const seenDrivers = new Set(rows.map(p => p.driver));
-  const driverNames = driversCache.map(d => d.name).filter(n => seenDrivers.has(n));
-  seenDrivers.forEach(n => { if (!driverNames.includes(n)) driverNames.push(n); });
-
-  // Group rows into entries by date + site + company.
   const groups = {};
-  const groupOrder = [];
+  const order = [];
+
   rows.forEach(p => {
     const key = [p.date, p.site, p.company].join('||');
     if (!groups[key]) {
-      groups[key] = { date: p.date, site: p.site, company: p.company, entries: {}, totalLoadsToGive: 0, rowTotal: 0, rate_per_ton: p.rate_per_ton, rate_per_load: p.rate_per_load };
-      groupOrder.push(key);
-    }
-    const g = groups[key];
-    g.entries[p.driver] = { loads_to_give: (g.entries[p.driver]?.loads_to_give || 0) + (Number(p.loads_to_give)||0),
-                             total: (g.entries[p.driver]?.total || 0) + (Number(p.total)||0) };
-    g.totalLoadsToGive += Number(p.loads_to_give) || 0;
-    g.rowTotal += Number(p.total) || 0;
-  });
-  groupOrder.sort((a,b) => groups[a].date.localeCompare(groups[b].date));
-
-  const pivotRows = groupOrder.map(key => {
-    const g = groups[key];
-    const perDriver = {};
-    driverNames.forEach(name => {
-      const e = g.entries[name];
-      if (!e) { perDriver[name] = null; return; }
-      const dayKey = name + '|' + g.date;
-      const dayAssigned = driverDayAssigned[dayKey] || 0;
-      const share = dayAssigned > 0 ? e.loads_to_give / dayAssigned : 0;
-      const comp = planCompletionCache[dayKey] || { count: 0, dollars: 0, pending: false };
-      perDriver[name] = {
-        assigned: e.loads_to_give,
-        completed: Math.round(comp.count * share * 10) / 10,
-        issued: e.total,
-        completedDollars: comp.dollars * share,
-        pending: comp.pending
+      groups[key] = {
+        key, date: p.date, site: p.site, company: p.company,
+        rate_per_ton: p.rate_per_ton, tons_per_load: p.tons_per_load, weeks_fsc: p.weeks_fsc,
+        drivers: {}
       };
-    });
-    return { date: g.date, site: g.site, company: g.company, totalLoadsToGive: g.totalLoadsToGive,
-      rate_per_ton: g.rate_per_ton, rate_per_load: g.rate_per_load, rowTotal: g.rowTotal, perDriver };
+      order.push(key);
+    }
+    groups[key].drivers[p.driver] = { plan_id: p.plan_id, loads_to_give: Number(p.loads_to_give) || 0 };
   });
 
-  // Column totals per driver, across the whole filtered range.
-  const driverTotals = {};
-  driverNames.forEach(name => { driverTotals[name] = { assigned: 0, completed: 0, issued: 0, completedDollars: 0 }; });
-  pivotRows.forEach(r => {
-    driverNames.forEach(name => {
-      const c = r.perDriver[name];
-      if (!c) return;
-      driverTotals[name].assigned += c.assigned;
-      driverTotals[name].completed += c.completed;
-      driverTotals[name].issued += c.issued;
-      driverTotals[name].completedDollars += c.completedDollars;
-    });
+  planDraftGroups.forEach(g => {
+    if (!groups[g.key]) { groups[g.key] = g; order.push(g.key); }
   });
 
-  return { driverNames, rows: pivotRows, driverTotals };
+  order.sort((a,b) => (groups[a].date || '').localeCompare(groups[b].date || ''));
+  return order.map(k => groups[k]);
 }
 
-function planDashboardStats(startDate, endDate){
-  const rows = planRowsInRange(startDate, endDate);
-  const byDriver = {};
-  driversCache.forEach(d => { byDriver[d.name] = { assigned: 0, issued: 0 }; });
-
-  rows.forEach(p => {
-    if (!byDriver[p.driver]) byDriver[p.driver] = { assigned: 0, issued: 0 };
-    byDriver[p.driver].assigned += Number(p.loads_to_give) || 0;
-    byDriver[p.driver].issued += Number(p.total) || 0;
+function addDraftRow(){
+  const key = 'draft_' + Date.now();
+  planDraftGroups.push({
+    key, date: formatDateKey(new Date()), site: '', company: '',
+    rate_per_ton: 0, tons_per_load: 25, weeks_fsc: 0, drivers: {}
   });
+  const startDate = document.getElementById('planFilterStart').value;
+  const endDate = document.getElementById('planFilterEnd').value;
+  renderPlanDashboard(startDate, endDate);
+}
 
-  // Completed / Completed $ come from the real Tickets data across the same
-  // date range, per driver, regardless of whether a plan row exists that day.
-  Object.entries(planCompletionCache).forEach(([key, v]) => {
-    const sep = key.lastIndexOf('|');
-    const driver = key.slice(0, sep);
-    const dateKey = key.slice(sep + 1);
-    if (dateKey < startDate || dateKey > endDate) return;
-    if (!byDriver[driver]) byDriver[driver] = { assigned: 0, issued: 0 };
-    byDriver[driver].completed = (byDriver[driver].completed || 0) + v.count;
-    byDriver[driver].completedDollars = (byDriver[driver].completedDollars || 0) + v.dollars;
-    if (v.pending) byDriver[driver].pending = true;
-  });
+function findGroup(groupKey){
+  return buildPlanGroups(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value)
+    .find(g => g.key === groupKey);
+}
 
-  return byDriver;
+// Called on blur of any shared base-field input (date/site/company/rate/tons/fsc).
+// If the group already has saved driver rows, pushes the change to all of them.
+async function syncGroupBaseField(groupKey, field, rawValue){
+  const group = findGroup(groupKey);
+  if (!group) return;
+
+  const value = ['rate_per_ton','tons_per_load','weeks_fsc'].includes(field) ? (parseFloat(rawValue) || 0) : rawValue;
+  group[field] = value;
+
+  const driverEntries = Object.entries(group.drivers);
+  if (driverEntries.length === 0) {
+    // Nothing saved yet for this row — just keep it in the draft until a
+    // driver is added, at which point the current field values get sent.
+    if (!planDraftGroups.find(g => g.key === group.key)) planDraftGroups.push(group);
+    return;
+  }
+
+  await Promise.all(driverEntries.map(([driverName, d]) => {
+    const payload = { date: group.date, site: group.site, company: group.company,
+      rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load, weeks_fsc: group.weeks_fsc };
+    return fetchBridge('updatePlannedLoad', { planId: d.plan_id, payload: JSON.stringify(payload) });
+  }));
+  await loadDispatchPlanData();
+}
+
+// Called when picking a driver from a row's "+ driver" select — adds them to
+// that row with 0 loads, ready to type into immediately.
+async function addDriverToGroup(groupKey, driverName){
+  if (!driverName) return;
+  const group = findGroup(groupKey);
+  if (!group) return;
+  if (group.drivers[driverName]) return; // already there
+
+  if (!group.date || !group.rate_per_ton) {
+    alert('Fill in the date, site, and rate per ton for this row before adding a driver.');
+    const startDate = document.getElementById('planFilterStart').value;
+    const endDate = document.getElementById('planFilterEnd').value;
+    renderPlanDashboard(startDate, endDate);
+    return;
+  }
+
+  const payload = { date: group.date, driver: driverName, site: group.site, company: group.company,
+    rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load, weeks_fsc: group.weeks_fsc,
+    loads_to_give: 0 };
+  try {
+    await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
+    await loadDispatchPlanData();
+  } catch (err) {
+    alert('Could not add driver — ' + err.message);
+  }
+}
+
+// Called on blur of a driver's "Assigned" cell.
+async function syncDriverAssigned(groupKey, driverName, rawValue){
+  const group = findGroup(groupKey);
+  if (!group) return;
+  const loadsToGive = parseFloat(rawValue) || 0;
+  const existing = group.drivers[driverName];
+
+  const payload = { date: group.date, driver: driverName, site: group.site, company: group.company,
+    rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load, weeks_fsc: group.weeks_fsc,
+    loads_to_give: loadsToGive };
+
+  try {
+    if (existing && existing.plan_id) {
+      await fetchBridge('updatePlannedLoad', { planId: existing.plan_id, payload: JSON.stringify(payload) });
+    } else {
+      await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
+    }
+    await loadDispatchPlanData();
+  } catch (err) {
+    alert('Could not save — ' + err.message);
+  }
+}
+
+async function deletePlannedLoadUI(planId){
+  if (!confirm('Remove this driver from this row?')) return;
+  try {
+    await fetchBridge('deletePlannedLoad', { planId });
+    await loadDispatchPlanData();
+  } catch (err) {
+    alert('Could not delete — ' + err.message);
+  }
+}
+
+function computedRatePerLoad(group){
+  return (Number(group.tons_per_load) || 0) * (Number(group.rate_per_ton) || 0);
+}
+function computedRowTotal(group){
+  const ratePerLoad = computedRatePerLoad(group);
+  return Object.values(group.drivers).reduce((sum, d) => sum + (Number(d.loads_to_give) || 0) * ratePerLoad, 0);
+}
+
+function driverNamesForGroups(groups){
+  const seen = new Set();
+  groups.forEach(g => Object.keys(g.drivers).forEach(n => seen.add(n)));
+  const ordered = driversCache.map(d => d.name).filter(n => seen.has(n));
+  seen.forEach(n => { if (!ordered.includes(n)) ordered.push(n); });
+  return ordered;
+}
+
+function completionFor(driverName, date){
+  return planCompletionCache[driverName + '|' + date] || { count: 0, dollars: 0, pending: false };
 }
 
 function renderPlanDashboard(startDate, endDate){
   const bodyEl = document.getElementById('planDashboardBody');
-  const pivot = planPivotData(startDate, endDate);
-  const summary = planDashboardStats(startDate, endDate);
+  const groups = buildPlanGroups(startDate, endDate);
+  const driverNames = driverNamesForGroups(groups);
 
-  if (pivot.rows.length === 0) {
-    bodyEl.innerHTML = '<div class="empty-hint">No planned loads in this range yet. Add one above.</div>';
-    return;
+  // Summary strip across the whole filtered range.
+  let totalAssigned = 0, totalCompleted = 0, totalIssued = 0, totalCompletedDollars = 0;
+  groups.forEach(g => {
+    Object.entries(g.drivers).forEach(([name, d]) => {
+      totalAssigned += Number(d.loads_to_give) || 0;
+      totalIssued += (Number(d.loads_to_give) || 0) * computedRatePerLoad(g);
+      const c = completionFor(name, g.date);
+      totalCompleted += c.count;
+      totalCompletedDollars += c.dollars;
+    });
+  });
+
+  let dailyGoalHtml = '';
+  if (startDate === endDate) {
+    const met = totalCompletedDollars >= 1000;
+    dailyGoalHtml = `<div class="report-stat"><span class="report-stat-label">Daily $1,000 goal</span><span class="plan-daily-goal ${met ? 'met' : 'short'}">${fmtMoney(totalCompletedDollars)} of $1,000.00</span></div>`;
   }
 
-  let totalAssigned = 0, totalCompleted = 0, totalIssued = 0, totalCompletedDollars = 0;
-  Object.values(summary).forEach(s => {
-    totalAssigned += s.assigned || 0; totalCompleted += s.completed || 0;
-    totalIssued += s.issued || 0; totalCompletedDollars += s.completedDollars || 0;
-  });
   const summaryHtml = `
     <div class="report-row" style="margin-bottom:12px;">
       <div class="report-stat"><span class="report-stat-label">Assigned</span>${totalAssigned}</div>
@@ -2745,37 +2762,69 @@ function renderPlanDashboard(startDate, endDate){
       <div class="report-stat"><span class="report-stat-label">Issued $</span>${fmtMoney(totalIssued)}</div>
       <div class="report-stat"><span class="report-stat-label">Completed $</span>${fmtMoney(totalCompletedDollars)}</div>
       <div class="report-stat"><span class="report-stat-label">Variance $</span>${fmtMoney(totalCompletedDollars-totalIssued)}</div>
+      ${dailyGoalHtml}
     </div>
   `;
 
-  const driverHeaderRow = pivot.driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('');
-  const driverSubHeaderRow = pivot.driverNames.map(() =>
-    '<th>Assigned</th><th>Completed</th><th>Issued $</th><th>Completed $</th>'
-  ).join('');
+  if (groups.length === 0) {
+    bodyEl.innerHTML = summaryHtml + '<div class="empty-hint">No planned loads in this range yet. Tap "+ Add row" above.</div>';
+    return;
+  }
 
-  const bodyRows = pivot.rows.map(r => {
-    const driverCells = pivot.driverNames.map(name => {
-      const c = r.perDriver[name];
-      if (!c) return '<td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td>';
-      return `<td>${c.assigned}</td><td>${c.completed}${c.pending ? '*' : ''}</td><td>${fmtMoney(c.issued)}</td><td>${fmtMoney(c.completedDollars)}</td>`;
+  const driverHeaderRow = driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('') + '<th></th>';
+  const driverSubHeaderRow = driverNames.map(() =>
+    '<th>Assigned</th><th>Completed</th><th>Issued $</th><th>Completed $</th>'
+  ).join('') + '<th>Add driver</th>';
+
+  const bodyRows = groups.map(g => {
+    const ratePerLoad = computedRatePerLoad(g);
+    const rowTotal = computedRowTotal(g);
+    const gk = escapeHtmlSafe(g.key);
+
+    const driverCells = driverNames.map(name => {
+      const d = g.drivers[name];
+      if (!d) return '<td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td>';
+      const c = completionFor(name, g.date);
+      const issued = (Number(d.loads_to_give) || 0) * ratePerLoad;
+      return `<td><input class="plan-cell-input" type="number" value="${d.loads_to_give}" onblur="syncDriverAssigned('${gk}','${escapeHtmlSafe(name).replace(/'/g,"\\'")}', this.value)"></td>` +
+        `<td class="plan-computed">${c.count}${c.pending ? '*' : ''}</td>` +
+        `<td class="plan-computed">${fmtMoney(issued)}</td>` +
+        `<td class="plan-computed">${fmtMoney(c.dollars)}</td>`;
     }).join('');
+
+    const availableDrivers = driversCache.filter(d => !g.drivers[d.name]);
+    const addDriverCell = `<td><select class="plan-add-driver-select" onchange="addDriverToGroup('${gk}', this.value); this.value='';">
+      <option value="">+ driver</option>
+      ${availableDrivers.map(d => `<option value="${escapeHtmlSafe(d.name)}">${escapeHtmlSafe(d.name)}</option>`).join('')}
+    </select></td>`;
+
     return `<tr>
-      <td>${escapeHtmlSafe(r.date)}</td>
-      <td class="plan-site-cell">${escapeHtmlSafe(r.site)}</td>
-      <td>${escapeHtmlSafe(r.company)}</td>
-      <td>${r.totalLoadsToGive}</td>
-      <td>${fmtMoney(r.rate_per_ton)}</td>
-      <td>${fmtMoney(r.rowTotal)}</td>
+      <td><input class="plan-cell-input" type="date" value="${g.date}" onblur="syncGroupBaseField('${gk}','date', this.value)"></td>
+      <td class="plan-site-cell"><input class="plan-cell-input" type="text" value="${escapeHtmlSafe(g.site)}" placeholder="Site" onblur="syncGroupBaseField('${gk}','site', this.value)"></td>
+      <td><input class="plan-cell-input" type="text" value="${escapeHtmlSafe(g.company)}" placeholder="Company" onblur="syncGroupBaseField('${gk}','company', this.value)"></td>
+      <td><input class="plan-cell-input" type="number" step="0.01" value="${g.rate_per_ton}" onblur="syncGroupBaseField('${gk}','rate_per_ton', this.value)"></td>
+      <td><input class="plan-cell-input" type="number" step="0.01" value="${g.tons_per_load}" onblur="syncGroupBaseField('${gk}','tons_per_load', this.value)"></td>
+      <td class="plan-computed">${fmtMoney(rowTotal)}</td>
       ${driverCells}
+      ${addDriverCell}
     </tr>`;
   }).join('');
 
   const totalsRow = `<tr>
     <td colspan="6">All entries</td>
-    ${pivot.driverNames.map(name => {
-      const t = pivot.driverTotals[name];
-      return `<td>${t.assigned}</td><td>${Math.round(t.completed*10)/10}</td><td>${fmtMoney(t.issued)}</td><td>${fmtMoney(t.completedDollars)}</td>`;
+    ${driverNames.map(name => {
+      let a = 0, c = 0, i = 0, cd = 0;
+      groups.forEach(g => {
+        const d = g.drivers[name];
+        if (!d) return;
+        a += Number(d.loads_to_give) || 0;
+        i += (Number(d.loads_to_give) || 0) * computedRatePerLoad(g);
+        const comp = completionFor(name, g.date);
+        c += comp.count; cd += comp.dollars;
+      });
+      return `<td>${a}</td><td>${c}</td><td>${fmtMoney(i)}</td><td>${fmtMoney(cd)}</td>`;
     }).join('')}
+    <td></td>
   </tr>`;
 
   bodyEl.innerHTML = `
@@ -2784,13 +2833,13 @@ function renderPlanDashboard(startDate, endDate){
       <table class="plan-table">
         <thead>
           <tr><th colspan="6">Entry</th>${driverHeaderRow}</tr>
-          <tr><th>Date</th><th>Site</th><th>Company</th><th>Loads To Give</th><th>Rate/Ton</th><th>Total</th>${driverSubHeaderRow}</tr>
+          <tr><th>Date</th><th>Site</th><th>Company</th><th>Rate/Ton</th><th>Tons/Load</th><th>Total</th>${driverSubHeaderRow}</tr>
         </thead>
         <tbody>${bodyRows}</tbody>
         <tfoot>${totalsRow}</tfoot>
       </table>
     </div>
-    <div class="empty-hint">* Completed $ marked with an asterisk is estimated from rate × tons because the ticket hasn't been settled yet. When a driver has more than one entry on the same day, that day's completed loads are split across the entries in proportion to loads assigned.</div>
+    <div class="empty-hint">Type directly into any cell — it saves when you tap away. Completed / Completed $ come from real Tickets data and can't be typed in. * = estimated, not yet settled.</div>
   `;
 }
 
@@ -2801,8 +2850,6 @@ function renderPlanProjection(){
   const lookbackStart = new Date(today); lookbackStart.setDate(lookbackStart.getDate() - 28);
   const lookbackStartKey = formatDateKey(lookbackStart);
 
-  // Trailing 4-week average loads/day and $/load, per driver, from real
-  // completions only (not planned — this is a forecast off actual pace).
   const byDriver = {};
   Object.entries(planCompletionCache).forEach(([key, v]) => {
     const sep = key.lastIndexOf('|');
@@ -2824,7 +2871,7 @@ function renderPlanProjection(){
   const rowsHtml = names.map(name => {
     const s = byDriver[name];
     const daysWorked = s.days.size || 1;
-    const perDay = s.count / 28; // spread over the full 28-day window, not just days worked
+    const perDay = s.count / 28;
     const perDayIfWorked = s.count / daysWorked;
     const avgPerLoad = s.count > 0 ? s.dollars / s.count : 0;
 
@@ -2849,19 +2896,22 @@ function exportPlanExcel(){
   if (typeof XLSX === 'undefined') { alert('Excel export isn\'t available right now — check your connection and try again.'); return; }
   const startDate = document.getElementById('planFilterStart').value;
   const endDate = document.getElementById('planFilterEnd').value;
-  const pivot = planPivotData(startDate, endDate);
+  const groups = buildPlanGroups(startDate, endDate);
+  const driverNames = driverNamesForGroups(groups);
 
-  const sheetData = pivot.rows.map(r => {
+  const sheetData = groups.map(g => {
+    const ratePerLoad = computedRatePerLoad(g);
     const row = {
-      'Date': r.date, 'Site': r.site, 'Company': r.company,
-      'Loads To Give': r.totalLoadsToGive, 'Rate/Ton': r.rate_per_ton, 'Total': r.rowTotal
+      'Date': g.date, 'Site': g.site, 'Company': g.company,
+      'Rate/Ton': g.rate_per_ton, 'Tons/Load': g.tons_per_load, 'Total': computedRowTotal(g)
     };
-    pivot.driverNames.forEach(name => {
-      const c = r.perDriver[name];
-      row[`${name} Assigned`] = c ? c.assigned : '';
-      row[`${name} Completed`] = c ? c.completed : '';
-      row[`${name} Issued $`] = c ? c.issued : '';
-      row[`${name} Completed $`] = c ? Math.round(c.completedDollars * 100) / 100 : '';
+    driverNames.forEach(name => {
+      const d = g.drivers[name];
+      const c = completionFor(name, g.date);
+      row[`${name} Assigned`] = d ? d.loads_to_give : '';
+      row[`${name} Completed`] = d ? c.count : '';
+      row[`${name} Issued $`] = d ? Math.round((d.loads_to_give * ratePerLoad) * 100) / 100 : '';
+      row[`${name} Completed $`] = d ? Math.round(c.dollars * 100) / 100 : '';
     });
     return row;
   });
@@ -2875,19 +2925,23 @@ function exportPlanExcel(){
 function exportPlanPDF(){
   const startDate = document.getElementById('planFilterStart').value;
   const endDate = document.getElementById('planFilterEnd').value;
-  const pivot = planPivotData(startDate, endDate);
+  const groups = buildPlanGroups(startDate, endDate);
+  const driverNames = driverNamesForGroups(groups);
 
-  const driverHeaderRow = pivot.driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('');
-  const driverSubHeaderRow = pivot.driverNames.map(() =>
+  const driverHeaderRow = driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('');
+  const driverSubHeaderRow = driverNames.map(() =>
     '<th>Assigned</th><th>Completed</th><th>Issued $</th><th>Completed $</th>'
   ).join('');
-  const rowsHtml = pivot.rows.map(r => {
-    const driverCells = pivot.driverNames.map(name => {
-      const c = r.perDriver[name];
-      if (!c) return '<td>–</td><td>–</td><td>–</td><td>–</td>';
-      return `<td>${c.assigned}</td><td>${c.completed}${c.pending ? '*' : ''}</td><td>${fmtMoney(c.issued)}</td><td>${fmtMoney(c.completedDollars)}</td>`;
+  const rowsHtml = groups.map(g => {
+    const ratePerLoad = computedRatePerLoad(g);
+    const driverCells = driverNames.map(name => {
+      const d = g.drivers[name];
+      if (!d) return '<td>–</td><td>–</td><td>–</td><td>–</td>';
+      const c = completionFor(name, g.date);
+      const issued = d.loads_to_give * ratePerLoad;
+      return `<td>${d.loads_to_give}</td><td>${c.count}${c.pending ? '*' : ''}</td><td>${fmtMoney(issued)}</td><td>${fmtMoney(c.dollars)}</td>`;
     }).join('');
-    return `<tr><td>${escapeHtmlSafe(r.date)}</td><td>${escapeHtmlSafe(r.site)}</td><td>${escapeHtmlSafe(r.company)}</td><td>${r.totalLoadsToGive}</td><td>${fmtMoney(r.rate_per_ton)}</td><td>${fmtMoney(r.rowTotal)}</td>${driverCells}</tr>`;
+    return `<tr><td>${escapeHtmlSafe(g.date)}</td><td>${escapeHtmlSafe(g.site)}</td><td>${escapeHtmlSafe(g.company)}</td><td>${fmtMoney(g.rate_per_ton)}</td><td>${g.tons_per_load}</td><td>${fmtMoney(computedRowTotal(g))}</td>${driverCells}</tr>`;
   }).join('');
 
   const printWindow = window.open('', '_blank');
@@ -2911,7 +2965,7 @@ function exportPlanPDF(){
       <h1>Earth Angels Express — Dispatch Plan</h1>
       <h2>${startDate} to ${endDate} · generated ${new Date().toLocaleString()}</h2>
       <table>
-        <tr><th rowspan="2">Date</th><th rowspan="2">Site</th><th rowspan="2">Company</th><th rowspan="2">Loads To Give</th><th rowspan="2">Rate/Ton</th><th rowspan="2">Total</th>${driverHeaderRow}</tr>
+        <tr><th rowspan="2">Date</th><th rowspan="2">Site</th><th rowspan="2">Company</th><th rowspan="2">Rate/Ton</th><th rowspan="2">Tons/Load</th><th rowspan="2">Total</th>${driverHeaderRow}</tr>
         <tr>${driverSubHeaderRow}</tr>
         ${rowsHtml}
       </table>

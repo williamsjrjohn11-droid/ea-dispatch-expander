@@ -260,6 +260,15 @@
   }
   .help-text{font-size:13px; color:var(--text-dim); line-height:1.5;}
   .help-text b{color:var(--text); font-weight:600;}
+  .plan-table-wrap{ overflow-x:auto; margin-bottom:14px; border:1px solid var(--border2); border-radius:8px; }
+  .plan-table{ border-collapse:collapse; width:100%; font-size:12px; white-space:nowrap; }
+  .plan-table th, .plan-table td{ border:1px solid var(--border2); padding:6px 8px; text-align:center; }
+  .plan-table thead th{ background:var(--panel2); color:var(--text-dim); font-weight:600; position:sticky; top:0; z-index:1; }
+  .plan-table thead tr:first-child th{ background:var(--amber-dim); color:var(--amber); }
+  .plan-table td.plan-site-cell{ text-align:left; white-space:normal; max-width:220px; color:var(--text); }
+  .plan-table tbody tr:nth-child(even){ background:rgba(255,255,255,.03); }
+  .plan-table tfoot td{ font-weight:700; background:var(--panel2); color:var(--text); }
+  .plan-table td.plan-empty{ color:var(--text3); }
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -2606,6 +2615,86 @@ function planRowsInRange(startDate, endDate){
   return planCache.filter(p => p.date >= startDate && p.date <= endDate);
 }
 
+// Builds the spreadsheet-style pivot: one row per (date, site, company) entry,
+// with a set of columns per driver (Assigned / Completed / Issued $ / Completed $),
+// same shape as the "TODAY'S TOTALS" / History layout in the old Excel tracker.
+// Completed/Completed $ come from real Tickets data at the driver+date level;
+// when a driver has more than one entry on the same date, that driver's daily
+// completed count/$ is split across those entries in proportion to how many
+// loads were assigned on each — an approximation, noted under the table.
+function planPivotData(startDate, endDate){
+  const rows = planRowsInRange(startDate, endDate);
+
+  // Driver+date totals, for proportional splitting when a driver has
+  // multiple entries on the same day.
+  const driverDayAssigned = {};
+  rows.forEach(p => {
+    const key = p.driver + '|' + p.date;
+    driverDayAssigned[key] = (driverDayAssigned[key] || 0) + (Number(p.loads_to_give) || 0);
+  });
+
+  // Driver column order: roster order first, then any names not in the
+  // current roster (e.g. a driver who's since left) at the end.
+  const seenDrivers = new Set(rows.map(p => p.driver));
+  const driverNames = driversCache.map(d => d.name).filter(n => seenDrivers.has(n));
+  seenDrivers.forEach(n => { if (!driverNames.includes(n)) driverNames.push(n); });
+
+  // Group rows into entries by date + site + company.
+  const groups = {};
+  const groupOrder = [];
+  rows.forEach(p => {
+    const key = [p.date, p.site, p.company].join('||');
+    if (!groups[key]) {
+      groups[key] = { date: p.date, site: p.site, company: p.company, entries: {}, totalLoadsToGive: 0, rowTotal: 0, rate_per_ton: p.rate_per_ton, rate_per_load: p.rate_per_load };
+      groupOrder.push(key);
+    }
+    const g = groups[key];
+    g.entries[p.driver] = { loads_to_give: (g.entries[p.driver]?.loads_to_give || 0) + (Number(p.loads_to_give)||0),
+                             total: (g.entries[p.driver]?.total || 0) + (Number(p.total)||0) };
+    g.totalLoadsToGive += Number(p.loads_to_give) || 0;
+    g.rowTotal += Number(p.total) || 0;
+  });
+  groupOrder.sort((a,b) => groups[a].date.localeCompare(groups[b].date));
+
+  const pivotRows = groupOrder.map(key => {
+    const g = groups[key];
+    const perDriver = {};
+    driverNames.forEach(name => {
+      const e = g.entries[name];
+      if (!e) { perDriver[name] = null; return; }
+      const dayKey = name + '|' + g.date;
+      const dayAssigned = driverDayAssigned[dayKey] || 0;
+      const share = dayAssigned > 0 ? e.loads_to_give / dayAssigned : 0;
+      const comp = planCompletionCache[dayKey] || { count: 0, dollars: 0, pending: false };
+      perDriver[name] = {
+        assigned: e.loads_to_give,
+        completed: Math.round(comp.count * share * 10) / 10,
+        issued: e.total,
+        completedDollars: comp.dollars * share,
+        pending: comp.pending
+      };
+    });
+    return { date: g.date, site: g.site, company: g.company, totalLoadsToGive: g.totalLoadsToGive,
+      rate_per_ton: g.rate_per_ton, rate_per_load: g.rate_per_load, rowTotal: g.rowTotal, perDriver };
+  });
+
+  // Column totals per driver, across the whole filtered range.
+  const driverTotals = {};
+  driverNames.forEach(name => { driverTotals[name] = { assigned: 0, completed: 0, issued: 0, completedDollars: 0 }; });
+  pivotRows.forEach(r => {
+    driverNames.forEach(name => {
+      const c = r.perDriver[name];
+      if (!c) return;
+      driverTotals[name].assigned += c.assigned;
+      driverTotals[name].completed += c.completed;
+      driverTotals[name].issued += c.issued;
+      driverTotals[name].completedDollars += c.completedDollars;
+    });
+  });
+
+  return { driverNames, rows: pivotRows, driverTotals };
+}
+
 function planDashboardStats(startDate, endDate){
   const rows = planRowsInRange(startDate, endDate);
   const byDriver = {};
@@ -2635,60 +2724,73 @@ function planDashboardStats(startDate, endDate){
 
 function renderPlanDashboard(startDate, endDate){
   const bodyEl = document.getElementById('planDashboardBody');
-  const byDriver = planDashboardStats(startDate, endDate);
+  const pivot = planPivotData(startDate, endDate);
+  const summary = planDashboardStats(startDate, endDate);
 
-  const names = Object.keys(byDriver);
-  if (names.length === 0) {
-    bodyEl.innerHTML = '<div class="empty-hint">No planned loads or completed tickets in this range yet.</div>';
+  if (pivot.rows.length === 0) {
+    bodyEl.innerHTML = '<div class="empty-hint">No planned loads in this range yet. Add one above.</div>';
     return;
   }
 
   let totalAssigned = 0, totalCompleted = 0, totalIssued = 0, totalCompletedDollars = 0;
+  Object.values(summary).forEach(s => {
+    totalAssigned += s.assigned || 0; totalCompleted += s.completed || 0;
+    totalIssued += s.issued || 0; totalCompletedDollars += s.completedDollars || 0;
+  });
+  const summaryHtml = `
+    <div class="report-row" style="margin-bottom:12px;">
+      <div class="report-stat"><span class="report-stat-label">Assigned</span>${totalAssigned}</div>
+      <div class="report-stat"><span class="report-stat-label">Completed</span>${totalCompleted}</div>
+      <div class="report-stat"><span class="report-stat-label">Completion %</span>${totalAssigned>0?Math.round((totalCompleted/totalAssigned)*100):0}%</div>
+      <div class="report-stat"><span class="report-stat-label">Issued $</span>${fmtMoney(totalIssued)}</div>
+      <div class="report-stat"><span class="report-stat-label">Completed $</span>${fmtMoney(totalCompletedDollars)}</div>
+      <div class="report-stat"><span class="report-stat-label">Variance $</span>${fmtMoney(totalCompletedDollars-totalIssued)}</div>
+    </div>
+  `;
 
-  const rowsHtml = names.map(name => {
-    const s = byDriver[name];
-    const assigned = s.assigned || 0;
-    const completed = s.completed || 0;
-    const missed = Math.max(0, assigned - completed);
-    const over = Math.max(0, completed - assigned);
-    const pct = assigned > 0 ? Math.round((completed / assigned) * 100) : (completed > 0 ? 100 : 0);
-    const issued = s.issued || 0;
-    const completedDollars = s.completedDollars || 0;
-    const variance = completedDollars - issued;
+  const driverHeaderRow = pivot.driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('');
+  const driverSubHeaderRow = pivot.driverNames.map(() =>
+    '<th>Assigned</th><th>Completed</th><th>Issued $</th><th>Completed $</th>'
+  ).join('');
 
-    totalAssigned += assigned; totalCompleted += completed;
-    totalIssued += issued; totalCompletedDollars += completedDollars;
-
-    return `
-      <div class="report-row">
-        <div class="report-name">${escapeHtmlSafe(name)}${s.pending ? ' <span class="report-stat-label">(pending settlement)</span>' : ''}</div>
-        <div class="report-stat"><span class="report-stat-label">Assigned</span>${assigned}</div>
-        <div class="report-stat"><span class="report-stat-label">Completed</span>${completed}</div>
-        <div class="report-stat"><span class="report-stat-label">Missed</span>${missed}</div>
-        <div class="report-stat"><span class="report-stat-label">Over</span>${over}</div>
-        <div class="report-stat"><span class="report-stat-label">Completion %</span>${pct}%</div>
-        <div class="report-stat"><span class="report-stat-label">Issued $</span>${fmtMoney(issued)}</div>
-        <div class="report-stat"><span class="report-stat-label">Completed $</span>${fmtMoney(completedDollars)}</div>
-        <div class="report-stat"><span class="report-stat-label">Variance $</span>${fmtMoney(variance)}</div>
-      </div>
-    `;
+  const bodyRows = pivot.rows.map(r => {
+    const driverCells = pivot.driverNames.map(name => {
+      const c = r.perDriver[name];
+      if (!c) return '<td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td>';
+      return `<td>${c.assigned}</td><td>${c.completed}${c.pending ? '*' : ''}</td><td>${fmtMoney(c.issued)}</td><td>${fmtMoney(c.completedDollars)}</td>`;
+    }).join('');
+    return `<tr>
+      <td>${escapeHtmlSafe(r.date)}</td>
+      <td class="plan-site-cell">${escapeHtmlSafe(r.site)}</td>
+      <td>${escapeHtmlSafe(r.company)}</td>
+      <td>${r.totalLoadsToGive}</td>
+      <td>${fmtMoney(r.rate_per_ton)}</td>
+      <td>${fmtMoney(r.rowTotal)}</td>
+      ${driverCells}
+    </tr>`;
   }).join('');
 
-  const totalVariance = totalCompletedDollars - totalIssued;
+  const totalsRow = `<tr>
+    <td colspan="6">All entries</td>
+    ${pivot.driverNames.map(name => {
+      const t = pivot.driverTotals[name];
+      return `<td>${t.assigned}</td><td>${Math.round(t.completed*10)/10}</td><td>${fmtMoney(t.issued)}</td><td>${fmtMoney(t.completedDollars)}</td>`;
+    }).join('')}
+  </tr>`;
+
   bodyEl.innerHTML = `
-    <div class="report-row" style="font-weight:600; border-bottom:2px solid var(--border2);">
-      <div class="report-name">All drivers</div>
-      <div class="report-stat">${totalAssigned}</div>
-      <div class="report-stat">${totalCompleted}</div>
-      <div class="report-stat"></div>
-      <div class="report-stat"></div>
-      <div class="report-stat">${totalAssigned > 0 ? Math.round((totalCompleted/totalAssigned)*100) : 0}%</div>
-      <div class="report-stat">${fmtMoney(totalIssued)}</div>
-      <div class="report-stat">${fmtMoney(totalCompletedDollars)}</div>
-      <div class="report-stat">${fmtMoney(totalVariance)}</div>
+    ${summaryHtml}
+    <div class="plan-table-wrap">
+      <table class="plan-table">
+        <thead>
+          <tr><th colspan="6">Entry</th>${driverHeaderRow}</tr>
+          <tr><th>Date</th><th>Site</th><th>Company</th><th>Loads To Give</th><th>Rate/Ton</th><th>Total</th>${driverSubHeaderRow}</tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+        <tfoot>${totalsRow}</tfoot>
+      </table>
     </div>
-    ${rowsHtml}
-    <div class="empty-hint" style="padding-top:14px;">Completed / Completed $ come from real Tickets data (EA direct-haul only). Amounts marked "pending settlement" are estimated from rate × tons since the ticket hasn't been settled yet.</div>
+    <div class="empty-hint">* Completed $ marked with an asterisk is estimated from rate × tons because the ticket hasn't been settled yet. When a driver has more than one entry on the same day, that day's completed loads are split across the entries in proportion to loads assigned.</div>
   `;
 }
 
@@ -2747,18 +2849,22 @@ function exportPlanExcel(){
   if (typeof XLSX === 'undefined') { alert('Excel export isn\'t available right now — check your connection and try again.'); return; }
   const startDate = document.getElementById('planFilterStart').value;
   const endDate = document.getElementById('planFilterEnd').value;
-  const byDriver = planDashboardStats(startDate, endDate);
+  const pivot = planPivotData(startDate, endDate);
 
-  const sheetData = Object.entries(byDriver).map(([name, s]) => ({
-    'Driver': name,
-    'Assigned': s.assigned || 0,
-    'Completed': s.completed || 0,
-    'Missed': Math.max(0, (s.assigned||0) - (s.completed||0)),
-    'Completion %': (s.assigned || 0) > 0 ? Math.round(((s.completed||0) / s.assigned) * 100) : 0,
-    'Issued $': s.issued || 0,
-    'Completed $': s.completedDollars || 0,
-    'Variance $': (s.completedDollars || 0) - (s.issued || 0)
-  }));
+  const sheetData = pivot.rows.map(r => {
+    const row = {
+      'Date': r.date, 'Site': r.site, 'Company': r.company,
+      'Loads To Give': r.totalLoadsToGive, 'Rate/Ton': r.rate_per_ton, 'Total': r.rowTotal
+    };
+    pivot.driverNames.forEach(name => {
+      const c = r.perDriver[name];
+      row[`${name} Assigned`] = c ? c.assigned : '';
+      row[`${name} Completed`] = c ? c.completed : '';
+      row[`${name} Issued $`] = c ? c.issued : '';
+      row[`${name} Completed $`] = c ? Math.round(c.completedDollars * 100) / 100 : '';
+    });
+    return row;
+  });
 
   const ws = XLSX.utils.json_to_sheet(sheetData);
   const wb = XLSX.utils.book_new();
@@ -2769,14 +2875,19 @@ function exportPlanExcel(){
 function exportPlanPDF(){
   const startDate = document.getElementById('planFilterStart').value;
   const endDate = document.getElementById('planFilterEnd').value;
-  const byDriver = planDashboardStats(startDate, endDate);
+  const pivot = planPivotData(startDate, endDate);
 
-  const rowsHtml = Object.entries(byDriver).map(([name, s]) => {
-    const assigned = s.assigned || 0, completed = s.completed || 0;
-    const missed = Math.max(0, assigned - completed);
-    const pct = assigned > 0 ? Math.round((completed/assigned)*100) : 0;
-    const issued = s.issued || 0, completedDollars = s.completedDollars || 0;
-    return `<tr><td>${escapeHtmlSafe(name)}</td><td>${assigned}</td><td>${completed}</td><td>${missed}</td><td>${pct}%</td><td>${fmtMoney(issued)}</td><td>${fmtMoney(completedDollars)}</td><td>${fmtMoney(completedDollars-issued)}</td></tr>`;
+  const driverHeaderRow = pivot.driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('');
+  const driverSubHeaderRow = pivot.driverNames.map(() =>
+    '<th>Assigned</th><th>Completed</th><th>Issued $</th><th>Completed $</th>'
+  ).join('');
+  const rowsHtml = pivot.rows.map(r => {
+    const driverCells = pivot.driverNames.map(name => {
+      const c = r.perDriver[name];
+      if (!c) return '<td>–</td><td>–</td><td>–</td><td>–</td>';
+      return `<td>${c.assigned}</td><td>${c.completed}${c.pending ? '*' : ''}</td><td>${fmtMoney(c.issued)}</td><td>${fmtMoney(c.completedDollars)}</td>`;
+    }).join('');
+    return `<tr><td>${escapeHtmlSafe(r.date)}</td><td>${escapeHtmlSafe(r.site)}</td><td>${escapeHtmlSafe(r.company)}</td><td>${r.totalLoadsToGive}</td><td>${fmtMoney(r.rate_per_ton)}</td><td>${fmtMoney(r.rowTotal)}</td>${driverCells}</tr>`;
   }).join('');
 
   const printWindow = window.open('', '_blank');
@@ -2790,8 +2901,9 @@ function exportPlanPDF(){
         body{ font-family: Arial, Helvetica, sans-serif; padding:24px; color:#111; }
         h1{ font-size:18px; margin-bottom:2px; }
         h2{ font-size:13px; color:#555; font-weight:normal; margin-top:0; }
-        table{ width:100%; border-collapse:collapse; margin-top:16px; }
-        th, td{ border:1px solid #ccc; padding:8px 10px; text-align:left; font-size:13px; }
+        table{ width:100%; border-collapse:collapse; margin-top:16px; font-size:11px; }
+        th, td{ border:1px solid #ccc; padding:6px 8px; text-align:center; }
+        td:nth-child(2){ text-align:left; }
         th{ background:#f0f0f0; }
       </style>
     </head>
@@ -2799,9 +2911,11 @@ function exportPlanPDF(){
       <h1>Earth Angels Express — Dispatch Plan</h1>
       <h2>${startDate} to ${endDate} · generated ${new Date().toLocaleString()}</h2>
       <table>
-        <tr><th>Driver</th><th>Assigned</th><th>Completed</th><th>Missed</th><th>Completion %</th><th>Issued $</th><th>Completed $</th><th>Variance $</th></tr>
+        <tr><th rowspan="2">Date</th><th rowspan="2">Site</th><th rowspan="2">Company</th><th rowspan="2">Loads To Give</th><th rowspan="2">Rate/Ton</th><th rowspan="2">Total</th>${driverHeaderRow}</tr>
+        <tr>${driverSubHeaderRow}</tr>
         ${rowsHtml}
       </table>
+      <p style="font-size:11px; color:#555;">* Completed $ marked with an asterisk is estimated from rate × tons because the ticket hasn't been settled yet.</p>
     </body>
     </html>
   `);

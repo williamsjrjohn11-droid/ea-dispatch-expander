@@ -281,6 +281,7 @@
     <button class="top-link-btn" onclick="openAddressBook()">📖 Address book</button>
     <button class="top-link-btn" onclick="openDriverReport()">📊 Driver report</button>
     <button class="top-link-btn" onclick="openHelp()">❓ How to use</button>
+    <button class="top-link-btn" onclick="openDispatchPlan()">🗓️ Dispatch planning</button>
   </div>
 
   <div class="modal-overlay" id="driverReportModal">
@@ -299,6 +300,43 @@
         <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportDriverReportPDF()">🖨️ Download PDF</button>
       </div>
       <div id="driverReportBody"><div class="plan-loading">Loading...</div></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="dispatchPlanModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Dispatch planning</h2>
+        <button class="modal-close" onclick="closeModal('dispatchPlanModal')">Close</button>
+      </div>
+
+      <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
+        <label style="margin-bottom:8px; display:block;">Add a planned load</label>
+        <input type="date" class="search-input" id="planDate" style="margin-bottom:8px;">
+        <select class="search-input" id="planDriver" style="margin-bottom:8px;"></select>
+        <input type="text" class="search-input" id="planSite" placeholder="Site (e.g. 6 1&quot; Melissa rail to Plano)" style="margin-bottom:8px;">
+        <input type="text" class="search-input" id="planCompany" placeholder="Company (e.g. Amrize)" style="margin-bottom:8px;">
+        <input type="number" class="search-input" id="planLoadsToGive" placeholder="Loads to give" style="margin-bottom:8px;">
+        <input type="number" step="0.01" class="search-input" id="planRatePerTon" placeholder="Rate per ton ($)" style="margin-bottom:8px;">
+        <input type="number" step="0.01" class="search-input" id="planTonsPerLoad" placeholder="Tons per load (default 25)" style="margin-bottom:8px;">
+        <input type="number" step="0.01" class="search-input" id="planWeeksFsc" placeholder="Weeks FSC (optional)" style="margin-bottom:8px;">
+        <button class="btn-secondary" onclick="addPlannedLoad()">+ Add planned load</button>
+        <div id="planAddStatus" class="tonnage-hint"></div>
+      </div>
+
+      <div class="strategy-row" style="margin-bottom:14px;">
+        <input type="date" class="search-input" id="planFilterStart" onchange="loadDispatchPlanData()">
+        <input type="date" class="search-input" id="planFilterEnd" onchange="loadDispatchPlanData()">
+      </div>
+      <div class="strategy-row" style="margin-bottom:14px;">
+        <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportPlanExcel()">📊 Download Excel</button>
+        <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportPlanPDF()">🖨️ Download PDF</button>
+      </div>
+
+      <div id="planDashboardBody"><div class="plan-loading">Loading...</div></div>
+
+      <h3 style="margin-top:20px;">Next 7 days — projection</h3>
+      <div id="planProjectionBody"><div class="plan-loading">Loading...</div></div>
     </div>
   </div>
 
@@ -2454,6 +2492,314 @@ function exportDriverReportPDF(){
       <h2>${escapeHtmlSafe(periodLabel)} · generated ${new Date().toLocaleString()}</h2>
       <table>
         <tr><th>Driver</th><th>Today</th><th>${escapeHtmlSafe(periodLabel)}</th><th>Current Rating</th></tr>
+        ${rowsHtml}
+      </table>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.focus();
+  setTimeout(() => printWindow.print(), 300);
+}
+
+// ---------- DISPATCH PLANNING ----------
+
+let planCache = []; // planned load rows for the current filter range
+let planCompletionCache = {}; // "driver|date" -> {count, dollars, pending}
+
+function fmtMoney(n){
+  return '$' + (Math.round((n || 0) * 100) / 100).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+async function openDispatchPlan(){
+  document.getElementById('dispatchPlanModal').classList.add('show');
+
+  const startEl = document.getElementById('planFilterStart');
+  const endEl = document.getElementById('planFilterEnd');
+  if (!startEl.value || !endEl.value) {
+    const monday = getMonday(new Date());
+    const sunday = new Date(monday); sunday.setDate(sunday.getDate() + 6);
+    startEl.value = formatDateKey(monday);
+    endEl.value = formatDateKey(sunday);
+  }
+  if (!document.getElementById('planDate').value) {
+    document.getElementById('planDate').value = formatDateKey(new Date());
+  }
+
+  const driverSel = document.getElementById('planDriver');
+  driverSel.innerHTML = driversCache.map(d => `<option value="${escapeHtmlSafe(d.name)}">${escapeHtmlSafe(d.name)}</option>`).join('');
+
+  await loadDispatchPlanData();
+}
+
+async function addPlannedLoad(){
+  const statusEl = document.getElementById('planAddStatus');
+  const payload = {
+    date: document.getElementById('planDate').value,
+    driver: document.getElementById('planDriver').value,
+    site: document.getElementById('planSite').value.trim(),
+    company: document.getElementById('planCompany').value.trim(),
+    loads_to_give: document.getElementById('planLoadsToGive').value,
+    rate_per_ton: document.getElementById('planRatePerTon').value,
+    tons_per_load: document.getElementById('planTonsPerLoad').value || 25,
+    weeks_fsc: document.getElementById('planWeeksFsc').value || 0
+  };
+  if (!payload.date || !payload.driver || !payload.loads_to_give || !payload.rate_per_ton) {
+    statusEl.textContent = 'Date, driver, loads to give, and rate per ton are required.';
+    return;
+  }
+  statusEl.textContent = 'Saving...';
+  try {
+    await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
+    statusEl.textContent = 'Saved.';
+    ['planSite','planCompany','planLoadsToGive','planRatePerTon','planTonsPerLoad','planWeeksFsc'].forEach(id => document.getElementById(id).value = '');
+    await loadDispatchPlanData();
+  } catch (err) {
+    statusEl.textContent = 'Could not save — ' + escapeHtmlSafe(err.message);
+  }
+}
+
+async function deletePlannedLoadUI(planId){
+  if (!confirm('Delete this planned load?')) return;
+  try {
+    await fetchBridge('deletePlannedLoad', { planId });
+    await loadDispatchPlanData();
+  } catch (err) {
+    alert('Could not delete — ' + err.message);
+  }
+}
+
+async function loadDispatchPlanData(){
+  const bodyEl = document.getElementById('planDashboardBody');
+  const projEl = document.getElementById('planProjectionBody');
+  bodyEl.innerHTML = '<div class="plan-loading">Loading...</div>';
+  projEl.innerHTML = '<div class="plan-loading">Loading...</div>';
+
+  const startDate = document.getElementById('planFilterStart').value;
+  const endDate = document.getElementById('planFilterEnd').value;
+  if (!startDate || !endDate) return;
+
+  try {
+    // Pull an extra 28 days back for the projection's trailing average,
+    // in addition to whatever range is being reviewed.
+    const rangeStartDate = new Date(startDate);
+    const projLookback = new Date(rangeStartDate);
+    projLookback.setDate(projLookback.getDate() - 28);
+    const fetchStart = formatDateKey(projLookback) < startDate ? formatDateKey(projLookback) : startDate;
+
+    const [planData, compData] = await Promise.all([
+      fetchBridge('getPlannedLoads', { startDate: fetchStart, endDate }),
+      fetchBridge('getCompletionValue', { startDate: fetchStart, endDate })
+    ]);
+    planCache = planData.plans || [];
+    planCompletionCache = compData.completion || {};
+
+    renderPlanDashboard(startDate, endDate);
+    renderPlanProjection();
+  } catch (err) {
+    bodyEl.innerHTML = `<div class="empty-hint">Could not load plan — ${escapeHtmlSafe(err.message)}</div>`;
+    projEl.innerHTML = '';
+  }
+}
+
+function planRowsInRange(startDate, endDate){
+  return planCache.filter(p => p.date >= startDate && p.date <= endDate);
+}
+
+function planDashboardStats(startDate, endDate){
+  const rows = planRowsInRange(startDate, endDate);
+  const byDriver = {};
+  driversCache.forEach(d => { byDriver[d.name] = { assigned: 0, issued: 0 }; });
+
+  rows.forEach(p => {
+    if (!byDriver[p.driver]) byDriver[p.driver] = { assigned: 0, issued: 0 };
+    byDriver[p.driver].assigned += Number(p.loads_to_give) || 0;
+    byDriver[p.driver].issued += Number(p.total) || 0;
+  });
+
+  // Completed / Completed $ come from the real Tickets data across the same
+  // date range, per driver, regardless of whether a plan row exists that day.
+  Object.entries(planCompletionCache).forEach(([key, v]) => {
+    const sep = key.lastIndexOf('|');
+    const driver = key.slice(0, sep);
+    const dateKey = key.slice(sep + 1);
+    if (dateKey < startDate || dateKey > endDate) return;
+    if (!byDriver[driver]) byDriver[driver] = { assigned: 0, issued: 0 };
+    byDriver[driver].completed = (byDriver[driver].completed || 0) + v.count;
+    byDriver[driver].completedDollars = (byDriver[driver].completedDollars || 0) + v.dollars;
+    if (v.pending) byDriver[driver].pending = true;
+  });
+
+  return byDriver;
+}
+
+function renderPlanDashboard(startDate, endDate){
+  const bodyEl = document.getElementById('planDashboardBody');
+  const byDriver = planDashboardStats(startDate, endDate);
+
+  const names = Object.keys(byDriver);
+  if (names.length === 0) {
+    bodyEl.innerHTML = '<div class="empty-hint">No planned loads or completed tickets in this range yet.</div>';
+    return;
+  }
+
+  let totalAssigned = 0, totalCompleted = 0, totalIssued = 0, totalCompletedDollars = 0;
+
+  const rowsHtml = names.map(name => {
+    const s = byDriver[name];
+    const assigned = s.assigned || 0;
+    const completed = s.completed || 0;
+    const missed = Math.max(0, assigned - completed);
+    const over = Math.max(0, completed - assigned);
+    const pct = assigned > 0 ? Math.round((completed / assigned) * 100) : (completed > 0 ? 100 : 0);
+    const issued = s.issued || 0;
+    const completedDollars = s.completedDollars || 0;
+    const variance = completedDollars - issued;
+
+    totalAssigned += assigned; totalCompleted += completed;
+    totalIssued += issued; totalCompletedDollars += completedDollars;
+
+    return `
+      <div class="report-row">
+        <div class="report-name">${escapeHtmlSafe(name)}${s.pending ? ' <span class="report-stat-label">(pending settlement)</span>' : ''}</div>
+        <div class="report-stat"><span class="report-stat-label">Assigned</span>${assigned}</div>
+        <div class="report-stat"><span class="report-stat-label">Completed</span>${completed}</div>
+        <div class="report-stat"><span class="report-stat-label">Missed</span>${missed}</div>
+        <div class="report-stat"><span class="report-stat-label">Over</span>${over}</div>
+        <div class="report-stat"><span class="report-stat-label">Completion %</span>${pct}%</div>
+        <div class="report-stat"><span class="report-stat-label">Issued $</span>${fmtMoney(issued)}</div>
+        <div class="report-stat"><span class="report-stat-label">Completed $</span>${fmtMoney(completedDollars)}</div>
+        <div class="report-stat"><span class="report-stat-label">Variance $</span>${fmtMoney(variance)}</div>
+      </div>
+    `;
+  }).join('');
+
+  const totalVariance = totalCompletedDollars - totalIssued;
+  bodyEl.innerHTML = `
+    <div class="report-row" style="font-weight:600; border-bottom:2px solid var(--border2);">
+      <div class="report-name">All drivers</div>
+      <div class="report-stat">${totalAssigned}</div>
+      <div class="report-stat">${totalCompleted}</div>
+      <div class="report-stat"></div>
+      <div class="report-stat"></div>
+      <div class="report-stat">${totalAssigned > 0 ? Math.round((totalCompleted/totalAssigned)*100) : 0}%</div>
+      <div class="report-stat">${fmtMoney(totalIssued)}</div>
+      <div class="report-stat">${fmtMoney(totalCompletedDollars)}</div>
+      <div class="report-stat">${fmtMoney(totalVariance)}</div>
+    </div>
+    ${rowsHtml}
+    <div class="empty-hint" style="padding-top:14px;">Completed / Completed $ come from real Tickets data (EA direct-haul only). Amounts marked "pending settlement" are estimated from rate × tons since the ticket hasn't been settled yet.</div>
+  `;
+}
+
+function renderPlanProjection(){
+  const projEl = document.getElementById('planProjectionBody');
+  const today = new Date();
+  const todayKey = formatDateKey(today);
+  const lookbackStart = new Date(today); lookbackStart.setDate(lookbackStart.getDate() - 28);
+  const lookbackStartKey = formatDateKey(lookbackStart);
+
+  // Trailing 4-week average loads/day and $/load, per driver, from real
+  // completions only (not planned — this is a forecast off actual pace).
+  const byDriver = {};
+  Object.entries(planCompletionCache).forEach(([key, v]) => {
+    const sep = key.lastIndexOf('|');
+    const driver = key.slice(0, sep);
+    const dateKey = key.slice(sep + 1);
+    if (dateKey < lookbackStartKey || dateKey > todayKey) return;
+    if (!byDriver[driver]) byDriver[driver] = { count: 0, dollars: 0, days: new Set() };
+    byDriver[driver].count += v.count;
+    byDriver[driver].dollars += v.dollars;
+    byDriver[driver].days.add(dateKey);
+  });
+
+  const names = Object.keys(byDriver);
+  if (names.length === 0) {
+    projEl.innerHTML = '<div class="empty-hint">Not enough history yet (need completed loads in the last 4 weeks) to project forward.</div>';
+    return;
+  }
+
+  const rowsHtml = names.map(name => {
+    const s = byDriver[name];
+    const daysWorked = s.days.size || 1;
+    const perDay = s.count / 28; // spread over the full 28-day window, not just days worked
+    const perDayIfWorked = s.count / daysWorked;
+    const avgPerLoad = s.count > 0 ? s.dollars / s.count : 0;
+
+    const low = perDay * 7;
+    const high = perDayIfWorked * 7;
+    const midLoads = (low + high) / 2;
+    const midDollars = midLoads * avgPerLoad;
+
+    return `
+      <div class="report-row">
+        <div class="report-name">${escapeHtmlSafe(name)}</div>
+        <div class="report-stat"><span class="report-stat-label">Projected loads</span>${low.toFixed(1)}–${high.toFixed(1)}</div>
+        <div class="report-stat"><span class="report-stat-label">Est. value</span>${fmtMoney(midDollars)}</div>
+      </div>
+    `;
+  }).join('');
+
+  projEl.innerHTML = rowsHtml + '<div class="empty-hint" style="padding-top:14px;">Range = trailing 28-day average spread across all days (low) vs. only days actually worked (high) × 7, at each driver\'s average $/load over that window. This is a rough forecast, not a guarantee.</div>';
+}
+
+function exportPlanExcel(){
+  if (typeof XLSX === 'undefined') { alert('Excel export isn\'t available right now — check your connection and try again.'); return; }
+  const startDate = document.getElementById('planFilterStart').value;
+  const endDate = document.getElementById('planFilterEnd').value;
+  const byDriver = planDashboardStats(startDate, endDate);
+
+  const sheetData = Object.entries(byDriver).map(([name, s]) => ({
+    'Driver': name,
+    'Assigned': s.assigned || 0,
+    'Completed': s.completed || 0,
+    'Missed': Math.max(0, (s.assigned||0) - (s.completed||0)),
+    'Completion %': (s.assigned || 0) > 0 ? Math.round(((s.completed||0) / s.assigned) * 100) : 0,
+    'Issued $': s.issued || 0,
+    'Completed $': s.completedDollars || 0,
+    'Variance $': (s.completedDollars || 0) - (s.issued || 0)
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(sheetData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Dispatch Plan');
+  XLSX.writeFile(wb, `EA_Dispatch_Plan_${startDate}_to_${endDate}.xlsx`);
+}
+
+function exportPlanPDF(){
+  const startDate = document.getElementById('planFilterStart').value;
+  const endDate = document.getElementById('planFilterEnd').value;
+  const byDriver = planDashboardStats(startDate, endDate);
+
+  const rowsHtml = Object.entries(byDriver).map(([name, s]) => {
+    const assigned = s.assigned || 0, completed = s.completed || 0;
+    const missed = Math.max(0, assigned - completed);
+    const pct = assigned > 0 ? Math.round((completed/assigned)*100) : 0;
+    const issued = s.issued || 0, completedDollars = s.completedDollars || 0;
+    return `<tr><td>${escapeHtmlSafe(name)}</td><td>${assigned}</td><td>${completed}</td><td>${missed}</td><td>${pct}%</td><td>${fmtMoney(issued)}</td><td>${fmtMoney(completedDollars)}</td><td>${fmtMoney(completedDollars-issued)}</td></tr>`;
+  }).join('');
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) { alert('Could not open the print preview — check that popups are allowed for this site.'); return; }
+
+  printWindow.document.write(`
+    <html>
+    <head>
+      <title>EA Dispatch Plan — ${startDate} to ${endDate}</title>
+      <style>
+        body{ font-family: Arial, Helvetica, sans-serif; padding:24px; color:#111; }
+        h1{ font-size:18px; margin-bottom:2px; }
+        h2{ font-size:13px; color:#555; font-weight:normal; margin-top:0; }
+        table{ width:100%; border-collapse:collapse; margin-top:16px; }
+        th, td{ border:1px solid #ccc; padding:8px 10px; text-align:left; font-size:13px; }
+        th{ background:#f0f0f0; }
+      </style>
+    </head>
+    <body>
+      <h1>Earth Angels Express — Dispatch Plan</h1>
+      <h2>${startDate} to ${endDate} · generated ${new Date().toLocaleString()}</h2>
+      <table>
+        <tr><th>Driver</th><th>Assigned</th><th>Completed</th><th>Missed</th><th>Completion %</th><th>Issued $</th><th>Completed $</th><th>Variance $</th></tr>
         ${rowsHtml}
       </table>
     </body>

@@ -634,7 +634,7 @@ function getUniqueLocations(){
     if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'], customer: defaultCustomerLabel, type: 'plant' });
   });
   customAddressCache.forEach(c => {
-    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, customer: c.customer || defaultCustomerLabel, type: c.location_type || 'site', rate_per_ton: c.rate_per_ton, custom: true });
+    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, customer: c.customer || defaultCustomerLabel, type: c.location_type || 'site', rate_per_ton: c.rate_per_ton, hours: c.hours || '', custom: true });
   });
   return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -752,6 +752,7 @@ function renderAddressBook(){
     <div class="addr-entry" style="cursor:pointer;" onclick="editAddressEntry(${i})">
       <div class="addr-name">${escapeHtmlSafe(loc.name)} <span class="badge badge-text" style="font-size:9px;">${escapeHtmlSafe(companyBadgeLabel(loc.customer, loc.type))}</span> <span style="color:var(--text3); font-size:11px;">✏️</span></div>
       <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
+      ${loc.hours ? `<div class="addr-line">Hours: ${escapeHtmlSafe(loc.hours)}</div>` : ''}
     </div>
   `).join('');
 }
@@ -763,8 +764,61 @@ function escapeHtmlSafe(s){
 // ---------- ADDRESS BOOK BULK IMPORT (Excel / photo OCR) ----------
 
 let addressImportRows = []; // { name, address, include }
+let laneImportRows = []; // { company, originName, originAddress, originHours, destName, destAddress, destHours, rate, include }
 
 function excelCellToStr(v){ return (v === undefined || v === null) ? '' : String(v).trim(); }
+
+// Detects a "lane rate" sheet — Company | Origin | Address | (hours) |
+// Destination | Address | (hours) | Rate — where a rate belongs to a
+// specific origin->destination pair, not a single location. Finds the
+// header row by content (works even with title rows above it, and doesn't
+// depend on exact column order beyond origin coming before destination).
+function detectLaneRateSheet(aoa){
+  let headerRowIdx = -1, header = null;
+  for (let i = 0; i < aoa.length; i++) {
+    const row = (aoa[i] || []).map(c => String(c || '').trim().toLowerCase());
+    if (row.some(c => /^orig|^orgin/.test(c)) && row.some(c => c.startsWith('destination'))) {
+      headerRowIdx = i;
+      header = (aoa[i] || []).map(c => String(c || '').trim());
+      break;
+    }
+  }
+  if (headerRowIdx === -1) return null;
+
+  const idxOf = pred => header.findIndex(h => pred(h.toLowerCase()));
+  const companyIdx = idxOf(h => h.startsWith('company'));
+  const originIdx = idxOf(h => /^orig|^orgin/.test(h));
+  const destIdx = idxOf(h => h.startsWith('destination'));
+  const rateIdx = header.findIndex(h => h.toLowerCase() === 'rate') !== -1
+    ? header.findIndex(h => h.toLowerCase() === 'rate')
+    : idxOf(h => h.startsWith('rate'));
+  if (originIdx === -1 || destIdx === -1 || rateIdx === -1) return null;
+
+  const originAddrIdx = originIdx + 1;
+  const destAddrIdx = destIdx + 1;
+  let originHoursIdx = -1, destHoursIdx = -1;
+  header.forEach((h, i) => {
+    if (!h.toLowerCase().includes('hour')) return;
+    if (i < destIdx) originHoursIdx = i; else destHoursIdx = i;
+  });
+
+  const lanes = aoa.slice(headerRowIdx + 1)
+    .filter(r => r && r.some(c => c !== ''))
+    .map(r => ({
+      company: companyIdx !== -1 ? String(r[companyIdx] || '').trim() : '',
+      originName: String(r[originIdx] || '').trim(),
+      originAddress: String(r[originAddrIdx] || '').trim(),
+      originHours: originHoursIdx !== -1 ? String(r[originHoursIdx] || '').trim() : '',
+      destName: String(r[destIdx] || '').trim(),
+      destAddress: String(r[destAddrIdx] || '').trim(),
+      destHours: destHoursIdx !== -1 ? String(r[destHoursIdx] || '').trim() : '',
+      rate: parseFloat(r[rateIdx]) || 0,
+      include: true
+    }))
+    .filter(l => l.originName && l.destName);
+
+  return lanes.length ? lanes : null;
+}
 
 async function handleAddrExcelUpload(event){
   const file = event.target.files[0];
@@ -777,6 +831,17 @@ async function handleAddrExcelUpload(event){
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: 'array' });
     const sheet = wb.Sheets[wb.SheetNames[0]];
+
+    // Lane-rate shape takes priority when detected — it's a different kind
+    // of data (a rate per origin->destination pair) from a flat address list.
+    const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    const lanes = detectLaneRateSheet(aoa);
+    if (lanes) {
+      laneImportRows = lanes;
+      renderLaneImportPreview();
+      return;
+    }
+
     const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
     const parsed = rows.map(r => {
@@ -890,7 +955,77 @@ async function confirmAddrImport(){
   previewEl.innerHTML = `<div class="empty-hint">✓ Imported ${success}${failed ? `, ${failed} failed` : ''}.</div>`;
 }
 
+// ---------- LANE-RATE IMPORT (origin -> destination pairs, not flat addresses) ----------
+
+function renderLaneImportPreview(){
+  const previewEl = document.getElementById('addrImportPreview');
+  if (laneImportRows.length === 0) { previewEl.innerHTML = ''; return; }
+
+  const rowsHtml = laneImportRows.map((r, i) => `
+    <div style="border:1px solid var(--border2); border-radius:8px; padding:10px; margin-bottom:8px;">
+      <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+        <input type="checkbox" ${r.include ? 'checked' : ''} onchange="laneImportRows[${i}].include = this.checked">
+        <input class="search-input" style="margin-bottom:0; flex:1;" value="${escapeHtmlSafe(r.company)}" onblur="laneImportRows[${i}].company = this.value" placeholder="Company">
+        <input class="search-input" type="number" step="0.01" style="margin-bottom:0; width:90px;" value="${r.rate || ''}" onblur="laneImportRows[${i}].rate = parseFloat(this.value) || 0" placeholder="$/ton">
+      </div>
+      <div class="strategy-row" style="margin-bottom:6px;">
+        <div style="flex:1;">
+          <input class="search-input" style="margin-bottom:4px;" value="${escapeHtmlSafe(r.originName)}" onblur="laneImportRows[${i}].originName = this.value" placeholder="Origin name">
+          <input class="search-input" style="margin-bottom:4px;" value="${escapeHtmlSafe(r.originAddress)}" onblur="laneImportRows[${i}].originAddress = this.value" placeholder="Origin address">
+          <input class="search-input" style="margin-bottom:0;" value="${escapeHtmlSafe(r.originHours)}" onblur="laneImportRows[${i}].originHours = this.value" placeholder="Origin hours (optional)">
+        </div>
+        <div style="flex:1;">
+          <input class="search-input" style="margin-bottom:4px;" value="${escapeHtmlSafe(r.destName)}" onblur="laneImportRows[${i}].destName = this.value" placeholder="Destination name">
+          <input class="search-input" style="margin-bottom:4px;" value="${escapeHtmlSafe(r.destAddress)}" onblur="laneImportRows[${i}].destAddress = this.value" placeholder="Destination address">
+          <input class="search-input" style="margin-bottom:0;" value="${escapeHtmlSafe(r.destHours)}" onblur="laneImportRows[${i}].destHours = this.value" placeholder="Destination hours (optional)">
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  previewEl.innerHTML = `
+    <div class="tonnage-hint" style="margin-top:10px;">Detected a lane rate sheet — each row is an origin → destination pair with its own rate, not a single address. Review before importing: each lane saves both locations (as Plants) plus the rate for that exact pair, so Dispatch Planning can pull the right rate automatically once you pick that lane as a site.</div>
+    ${rowsHtml}
+    <button class="btn-secondary" onclick="confirmLaneImport()">+ Import ${laneImportRows.filter(r => r.include).length} lanes</button>
+  `;
+}
+
+async function confirmLaneImport(){
+  const toImport = laneImportRows.filter(r => r.include && r.company && r.originName && r.destName);
+  if (toImport.length === 0) { alert('Nothing checked to import, or a checked row is missing a company, origin, or destination name.'); return; }
+
+  const previewEl = document.getElementById('addrImportPreview');
+  previewEl.innerHTML = '<div class="plan-loading">Importing...</div>';
+  let success = 0, failed = 0;
+  for (const r of toImport) {
+    try {
+      if (r.originAddress) {
+        await fetchBridge('saveCustomAddress', { stationName: r.originName, address: r.originAddress, customer: r.company, locationType: 'plant', hours: r.originHours });
+        const existing = customAddressCache.find(c => c.station_name.toLowerCase() === r.originName.toLowerCase());
+        if (existing) { existing.address = r.originAddress; existing.customer = r.company; existing.location_type = 'plant'; existing.hours = r.originHours; }
+        else customAddressCache.push({ station_name: r.originName, address: r.originAddress, customer: r.company, location_type: 'plant', rate_per_ton: null, hours: r.originHours });
+      }
+      if (r.destAddress) {
+        await fetchBridge('saveCustomAddress', { stationName: r.destName, address: r.destAddress, customer: r.company, locationType: 'plant', hours: r.destHours });
+        const existing = customAddressCache.find(c => c.station_name.toLowerCase() === r.destName.toLowerCase());
+        if (existing) { existing.address = r.destAddress; existing.customer = r.company; existing.location_type = 'plant'; existing.hours = r.destHours; }
+        else customAddressCache.push({ station_name: r.destName, address: r.destAddress, customer: r.company, location_type: 'plant', rate_per_ton: null, hours: r.destHours });
+      }
+      await fetchBridge('saveCustomRate', { company: r.company, originName: r.originName, destinationName: r.destName, ratePerTon: r.rate });
+      const existingRate = customRatesCache.find(x => x.company === r.company && x.origin_name === r.originName && x.destination_name === r.destName);
+      if (existingRate) existingRate.rate_per_ton = r.rate;
+      else customRatesCache.push({ company: r.company, origin_name: r.originName, destination_name: r.destName, rate_per_ton: r.rate });
+      success++;
+    } catch (e) { failed++; }
+  }
+  laneImportRows = [];
+  populateCustomerDropdowns();
+  renderAddressBook();
+  previewEl.innerHTML = `<div class="empty-hint">✓ Imported ${success} lane${success === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}.</div>`;
+}
+
 let customAddressCache = [];
+let customRatesCache = [];
 let defaultCustomerLabel = 'Amrize'; // the display name for the built-in book — renamable
 
 async function loadCustomAddresses(){
@@ -901,6 +1036,25 @@ async function loadCustomAddresses(){
   } catch (e) {
     customAddressCache = [];
   }
+}
+
+async function loadCustomRates(){
+  try {
+    const data = await fetchBridge('getCustomRates');
+    customRatesCache = data.rates || [];
+  } catch (e) {
+    customRatesCache = [];
+  }
+}
+
+// Looks up a saved lane rate for a company's origin -> destination pair —
+// same idea as the built-in Amrize matchRate(), but for rates you've
+// imported/saved yourself instead of the hardcoded table.
+function matchCustomRate(company, originName, destinationName){
+  const norm = s => (s || '').trim().toLowerCase();
+  const found = customRatesCache.find(r =>
+    norm(r.company) === norm(company) && norm(r.origin_name) === norm(originName) && norm(r.destination_name) === norm(destinationName));
+  return found ? { matched: true, ratePerTon: found.rate_per_ton } : { matched: false };
 }
 
 // Saves a corrected address for a site name so future dispatches to the
@@ -2387,6 +2541,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
   refreshDrivers();
   loadCustomAddresses();
+  loadCustomRates();
 });
 
 // ---------- ROUTE & STRATEGIC PLAN ----------
@@ -3389,13 +3544,31 @@ function getSiteOptions(company){
     return Array.from(seen.values()).sort((a,b) => a.label.localeCompare(b.label));
   }
 
-  return customAddressCache
+  const locationOptions = customAddressCache
     .filter(c => (c.customer || defaultCustomerLabel) === company)
     .map(c => ({ key: 'LOC|||' + c.station_name, kind: 'location', name: c.station_name,
       ratePerTon: (c.rate_per_ton !== null && c.rate_per_ton !== undefined) ? c.rate_per_ton : null,
       label: `${c.station_name} (${(c.location_type || 'site') === 'plant' ? 'Plant' : 'Site'})` +
-        ((c.rate_per_ton !== null && c.rate_per_ton !== undefined) ? ` ($${Number(c.rate_per_ton).toFixed(2)}/ton)` : '') }))
-    .sort((a,b) => a.label.localeCompare(b.label));
+        ((c.rate_per_ton !== null && c.rate_per_ton !== undefined) ? ` ($${Number(c.rate_per_ton).toFixed(2)}/ton)` : '') }));
+
+  // Saved lane rates (origin -> destination pairs) take priority when they
+  // exist — same idea as the built-in Amrize pairs, just editable per company.
+  const seenPairs = new Set();
+  const pairOptions = customRatesCache
+    .filter(r => (r.company || '').toLowerCase() === company.toLowerCase())
+    .map(r => {
+      const key = 'CPAIR|||' + r.origin_name + '|||' + r.destination_name;
+      if (seenPairs.has(key)) return null;
+      seenPairs.add(key);
+      return {
+        key, kind: 'cpair', origin: r.origin_name, destination: r.destination_name,
+        ratePerTon: r.rate_per_ton,
+        label: `${r.origin_name} to ${r.destination_name} ($${Number(r.rate_per_ton).toFixed(2)}/ton)`
+      };
+    })
+    .filter(Boolean);
+
+  return [...pairOptions, ...locationOptions].sort((a, b) => a.label.localeCompare(b.label));
 }
 
 // Handles the Site <select>: a known Amrize pair (auto-fills rate/ton from
@@ -3426,6 +3599,12 @@ async function handleSiteSelectChange(groupKey, selectEl){
     const match = customAddressCache.find(c => c.station_name === name);
     const fields = { site: name };
     if (match && match.rate_per_ton !== null && match.rate_per_ton !== undefined) fields.rate_per_ton = match.rate_per_ton;
+    await syncGroupFields(groupKey, fields);
+  } else if (val.startsWith('CPAIR|||')) {
+    const [, origin, destination] = val.split('|||');
+    const fields = { site: `${origin} to ${destination}` };
+    const rate = matchCustomRate((findGroup(groupKey) || {}).company, origin, destination);
+    if (rate.matched) fields.rate_per_ton = rate.ratePerTon;
     await syncGroupFields(groupKey, fields);
   }
 }

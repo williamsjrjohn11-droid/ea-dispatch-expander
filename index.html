@@ -3865,6 +3865,31 @@ async function deletePlannedLoadUI(planId){
   }
 }
 
+// Deletes an entire entry row — every driver assigned to it, and the row
+// itself. For a not-yet-saved draft row (no drivers ever added), this just
+// removes it locally since nothing was ever written to the sheet.
+async function deleteWholeRow(groupKey){
+  const group = findGroup(groupKey);
+  if (!group) return;
+
+  const driverPlanIds = Object.values(group.drivers || {}).map(d => d.plan_id).filter(Boolean);
+  const label = [group.date, group.site, group.company].filter(Boolean).join(' · ') || 'this entry';
+  if (driverPlanIds.length === 0) {
+    if (!confirm(`Delete ${label}? It hasn't been saved yet, so this just clears it from the grid.`)) return;
+    planDraftGroups = planDraftGroups.filter(g => g.key !== groupKey);
+    renderPlanDashboard(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
+    return;
+  }
+
+  if (!confirm(`Delete ${label}? This removes it for all ${driverPlanIds.length} driver${driverPlanIds.length === 1 ? '' : 's'} assigned to it — this can't be undone.`)) return;
+  try {
+    await Promise.all(driverPlanIds.map(planId => fetchBridge('deletePlannedLoad', { planId })));
+    await loadDispatchPlanData();
+  } catch (err) {
+    alert('Could not delete — ' + err.message);
+  }
+}
+
 function computedRatePerLoad(group){
   return Number(group.rate_per_load) || 0;
 }
@@ -3925,10 +3950,10 @@ function renderPlanDashboard(startDate, endDate){
     return;
   }
 
-  const driverHeaderRow = driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('') + '<th></th>';
+  const driverHeaderRow = driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('') + '<th></th><th></th>';
   const driverSubHeaderRow = driverNames.map(() =>
     '<th>Assigned</th><th>Completed</th><th>Issued $</th><th>Completed $</th>'
-  ).join('') + '<th>Add driver</th>';
+  ).join('') + '<th>Add driver</th><th>Delete</th>';
 
   const knownCompanies = getKnownCompanies();
 
@@ -3975,6 +4000,8 @@ function renderPlanDashboard(startDate, endDate){
       <option value="__custom__">+ Custom site...</option>
     </select></td>`;
 
+    const deleteRowCell = `<td><span class="remove-driver-icon" title="Delete this whole entry" onclick="deleteWholeRow('${gk}')">🗑️</span></td>`;
+
     return `<tr>
       <td><input class="plan-cell-input" type="date" value="${g.date}" onblur="syncGroupBaseField('${gk}','date', this.value)"></td>
       ${siteCell}
@@ -3988,6 +4015,7 @@ function renderPlanDashboard(startDate, endDate){
       <td class="plan-computed">${fmtMoney(rowTotal)}</td>
       ${driverCells}
       ${addDriverCell}
+      ${deleteRowCell}
     </tr>`;
   }).join('');
 
@@ -4005,6 +4033,7 @@ function renderPlanDashboard(startDate, endDate){
       });
       return `<td>${a}</td><td>${c}</td><td>${fmtMoney(i)}</td><td>${fmtMoney(cd)}</td>`;
     }).join('')}
+    <td></td>
     <td></td>
   </tr>`;
 

@@ -1175,15 +1175,28 @@ function runParse(){
 // quantity (typically a Drop off/Pick up job that didn't state them up
 // front), ask for them right away instead of silently leaving blank fields
 // that would otherwise slip into a driver's message unnoticed.
+// Builds a short "which job is this" tag for the confirmation prompts —
+// company + pickup→delivery — so answering is never a guess, especially
+// with multiple companies/loads in one paste.
+function describeJobForPrompt(f){
+  const parts = [];
+  if (f.company) parts.push(f.company);
+  const route = [f.pickupStation, f.deliveryStation].filter(Boolean).join(' → ');
+  if (route) parts.push(route);
+  return parts.join(': ');
+}
+
 function checkJobNeedsDetails(){
   const f = currentFields;
   if (!f) return;
+  const desc = describeJobForPrompt(f);
+  const suffix = desc ? `\n\n(${desc})` : '';
   if (!f.product) {
-    const product = window.prompt('What material are you hauling for this load?');
+    const product = window.prompt(`What material are you hauling for this load?${suffix}`);
     if (product && product.trim()) f.product = product.trim();
   }
   if (!f.quantity) {
-    const qty = window.prompt('How many total loads for this job?');
+    const qty = window.prompt(`How many total loads for this job?${suffix}`);
     if (qty && qty.trim() && !isNaN(parseInt(qty, 10))) f.quantity = qty.trim();
   }
 }
@@ -2053,7 +2066,9 @@ function setAssignment(driverName, value){
     // earlier prompt got cancelled), don't let a driver message go out
     // with a blank "Product -" line.
     if (!currentFields.product) {
-      const product = window.prompt('What material are you hauling for this load? (needed before sending to a driver)');
+      const desc = describeJobForPrompt(currentFields);
+      const suffix = desc ? `\n\n(${desc})` : '';
+      const product = window.prompt(`What material are you hauling for this load? (needed before sending to a driver)${suffix}`);
       if (product && product.trim()) { currentFields.product = product.trim(); renderFields(); }
     }
   }

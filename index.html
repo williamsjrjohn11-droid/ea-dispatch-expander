@@ -242,6 +242,10 @@
     max-width:600px; width:100%; margin-top:40px; padding:20px; max-height:85vh; overflow-y:auto;
   }
   #dispatchPlanModal .modal-box{ max-width:1400px; }
+  @media (max-width:480px){
+    #addressBookModal .strategy-row{ flex-direction:column; }
+    #addressBookModal .strategy-row > *{ width:100%; }
+  }
   @media (max-width:700px){
     .plan-table{ font-size:11px; }
     .plan-cell-input{ min-width:52px; min-height:34px; padding:4px 4px; font-size:11px; }
@@ -381,8 +385,8 @@
         <div class="strategy-row" style="margin-bottom:8px;">
           <select class="search-input" style="margin-bottom:0;" id="newAddrCustomer" onchange="handleCustomerSelectChange(this)"></select>
           <select class="search-input" style="margin-bottom:0;" id="newAddrType">
+            <option value="plant" selected>Plant</option>
             <option value="site">Site</option>
-            <option value="plant">Plant</option>
           </select>
         </div>
         <button class="btn-secondary" onclick="addNewCustomAddress()">+ Add to address book</button>
@@ -616,7 +620,7 @@ function getUniqueLocations(){
   const seen = new Map();
   ADDRESS_BOOK.forEach(row => {
     const pKey = row['Shipping Station'] + '|' + row['Shipping Address'];
-    if (!seen.has(pKey)) seen.set(pKey, { name: row['Shipping Station'], address: row['Shipping Address'], customer: defaultCustomerLabel, type: 'site' });
+    if (!seen.has(pKey)) seen.set(pKey, { name: row['Shipping Station'], address: row['Shipping Address'], customer: defaultCustomerLabel, type: 'plant' });
     const dKey = row['Amrize RMX Plant Name'] + '|' + row['Destination Address'];
     if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'], customer: defaultCustomerLabel, type: 'plant' });
   });
@@ -850,7 +854,7 @@ async function saveAddressForNextTime(fieldPrefix){
     return;
   }
 
-  const locationType = fieldPrefix === 'pickup' ? 'site' : 'plant';
+  const locationType = 'plant'; // both pickup and delivery here are Amrize facility locations, not customer job sites
   try {
     await fetchBridge('saveCustomAddress', { stationName, address, locationType });
     const existing = customAddressCache.find(c => c.station_name.toLowerCase() === stationName.toLowerCase());

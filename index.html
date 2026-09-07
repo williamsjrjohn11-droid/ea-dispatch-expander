@@ -2033,7 +2033,7 @@ function renderDriverAssignment(){
           ${'★'.repeat(Math.round(d.rating || 3))}${'☆'.repeat(5 - Math.round(d.rating || 3))} · edit
         </div>
         <div class="driver-phone-edit" onclick="editStartTime('${safeName}', '${d.start_time || ''}')">
-          ${d.start_time ? 'Starts ' + escapeHtml(formatHHMM(d.start_time)) + ' · edit' : '+ set start time'}
+          ${formatHHMM(d.start_time) ? 'Starts ' + escapeHtml(formatHHMM(d.start_time)) + ' · edit' : '+ set start time'}
         </div>
         <div class="off-toggle ${isOff ? 'is-off' : 'is-working'}" onclick="toggleDriverOff('${safeName}')">
           ${isOff ? '🚫 Off today · tap to include' : '✓ Working today · tap to mark off'}
@@ -2086,7 +2086,10 @@ async function editRating(driverName, currentRating){
 }
 
 function formatHHMM(hhmm){
-  const [h, m] = hhmm.split(':').map(Number);
+  const parts = String(hhmm || '').split(':');
+  if (parts.length !== 2) return null;
+  const h = Number(parts[0]), m = Number(parts[1]);
+  if (!Number.isFinite(h) || !Number.isFinite(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
   const d = new Date();
   d.setHours(h, m, 0, 0);
   return formatClockTime(d);

@@ -2201,6 +2201,7 @@ function renderDriverMessages(){
   container.innerHTML = assigned.map(d => {
     const qty = assignments[d.name];
     const lines = [];
+    lines.push(`Driver ${d.name}`);
     lines.push('Please acknowledge with a thumbs up 👍');
     if(dateLine) lines.push(dateLine);
     lines.push('');
@@ -2231,7 +2232,7 @@ function renderDriverMessages(){
     return `
       <div class="driver-msg-card">
         <div class="driver-msg-head">
-          <span class="driver-name">${escapeHtml(d.name)} — ${qty} load${qty==1?'':'s'}</span>
+          <span class="driver-name">${escapeHtml(d.name)} — ${qty} load${qty==1?'':'s'} across 1 job</span>
         </div>
         <div class="driver-msg-body" id="${msgId}">${escapeHtml(msg)}</div>
         <div class="driver-msg-actions">

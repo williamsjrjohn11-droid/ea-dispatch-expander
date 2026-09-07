@@ -2648,19 +2648,69 @@ function getKnownCompanies(){
 // company changes come through handleCompanySelectChange instead.
 // If the group already has saved driver rows, pushes the change to all of them.
 async function syncGroupBaseField(groupKey, field, rawValue){
+  return syncGroupFields(groupKey, { [field]: rawValue });
+}
+
+// Same as syncGroupBaseField but for setting several fields at once (used
+// when picking a known site auto-fills its rate/ton in the same step).
+async function syncGroupFields(groupKey, fieldsObj){
   const group = findGroup(groupKey);
   if (!group) return;
 
-  const value = ['rate_per_ton','tons_per_load','rate_per_load','weeks_fsc'].includes(field) ? (parseFloat(rawValue) || 0) : rawValue;
-  group[field] = value;
+  Object.entries(fieldsObj).forEach(([field, rawValue]) => {
+    const value = ['rate_per_ton','tons_per_load','rate_per_load','weeks_fsc'].includes(field) ? (parseFloat(rawValue) || 0) : rawValue;
+    group[field] = value;
+  });
 
   // If rate/ton or tons/load changed and rate/load hasn't been set yet,
   // suggest a starting rate/load — but never overwrite one already typed in.
-  if ((field === 'rate_per_ton' || field === 'tons_per_load') && !group.rate_per_load) {
+  if (('rate_per_ton' in fieldsObj || 'tons_per_load' in fieldsObj) && !group.rate_per_load) {
     group.rate_per_load = (Number(group.tons_per_load) || 0) * (Number(group.rate_per_ton) || 0);
   }
 
   await pushGroupFields(group);
+}
+
+// Known site pairs (pickup station -> Amrize plant), pulled from the same
+// address book used elsewhere in the app, each annotated with the real
+// rate/ton from the Amrize rate table when one matches.
+function getSiteOptions(){
+  const seen = new Map();
+  ADDRESS_BOOK.forEach(row => {
+    const station = row['Shipping Station'];
+    const plant = row['Amrize RMX Plant Name'];
+    const key = station + '|||' + plant;
+    if (seen.has(key)) return;
+    const rate = matchRate(station, plant);
+    seen.set(key, {
+      station, plant, key,
+      label: `${station} to ${plant}` + (rate.matched ? ` ($${rate.ratePerTon.toFixed(2)}/ton)` : ''),
+      ratePerTon: rate.matched ? rate.ratePerTon : null
+    });
+  });
+  return Array.from(seen.values()).sort((a,b) => a.label.localeCompare(b.label));
+}
+
+// Handles the Site <select>: a known pair (auto-fills rate/ton from the real
+// rate table), or "+ Custom site..." for anything not in the address book.
+async function handleSiteSelectChange(groupKey, selectEl){
+  const val = selectEl.value;
+  if (val === '__custom__') {
+    const name = window.prompt('Site description:');
+    if (!name || !name.trim()) {
+      renderPlanDashboard(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
+      return;
+    }
+    await syncGroupFields(groupKey, { site: name.trim() });
+    return;
+  }
+  if (!val) return;
+  const [station, plant] = val.split('|||');
+  const label = `${station} to ${plant}`;
+  const rate = matchRate(station, plant);
+  const fields = { site: label };
+  if (rate.matched) fields.rate_per_ton = rate.ratePerTon;
+  await syncGroupFields(groupKey, fields);
 }
 
 async function pushGroupFields(group){
@@ -2862,9 +2912,18 @@ function renderPlanDashboard(startDate, endDate){
       <option value="__new__">+ Add new company...</option>
     </select></td>`;
 
+    const knownSites = getSiteOptions();
+    const siteMatchesKnown = knownSites.some(s => (s.station + ' to ' + s.plant) === g.site);
+    const siteCell = `<td class="plan-site-cell"><select class="plan-cell-input" onchange="handleSiteSelectChange('${gk}', this)">
+      ${!g.site ? '<option value="" selected>Select...</option>' : ''}
+      ${!siteMatchesKnown && g.site ? `<option value="" selected>${escapeHtmlSafe(g.site)}</option>` : ''}
+      ${knownSites.map(s => `<option value="${escapeHtmlSafe(s.key)}" ${(s.station+' to '+s.plant)===g.site ? 'selected' : ''}>${escapeHtmlSafe(s.label)}</option>`).join('')}
+      <option value="__custom__">+ Custom site...</option>
+    </select></td>`;
+
     return `<tr>
       <td><input class="plan-cell-input" type="date" value="${g.date}" onblur="syncGroupBaseField('${gk}','date', this.value)"></td>
-      <td class="plan-site-cell"><input class="plan-cell-input" type="text" value="${escapeHtmlSafe(g.site)}" placeholder="Site" onblur="syncGroupBaseField('${gk}','site', this.value)"></td>
+      ${siteCell}
       ${companyCell}
       <td><input class="plan-cell-input" type="number" step="0.01" value="${g.rate_per_ton}" onblur="syncGroupBaseField('${gk}','rate_per_ton', this.value)"></td>
       <td><input class="plan-cell-input" type="number" step="0.01" value="${g.tons_per_load}" onblur="syncGroupBaseField('${gk}','tons_per_load', this.value)"></td>

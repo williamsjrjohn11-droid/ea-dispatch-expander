@@ -364,16 +364,37 @@
         <button class="modal-close" onclick="closeModal('addressBookModal')">Close</button>
       </div>
       <input type="text" class="search-input" id="addrSearch" placeholder="Search by name or address..." oninput="renderAddressBook()">
-      <select class="search-input" id="addrCustomerFilter" onchange="renderAddressBook()"></select>
+      <div class="strategy-row" style="margin-bottom:14px;">
+        <select class="search-input" style="margin-bottom:0;" id="addrCustomerFilter" onchange="renderAddressBook()"></select>
+        <select class="search-input" style="margin-bottom:0;" id="addrTypeFilter" onchange="renderAddressBook()">
+          <option value="">Plants & sites</option>
+          <option value="plant">Plants only</option>
+          <option value="site">Sites only</option>
+        </select>
+      </div>
       <button class="off-toggle" style="background:none; border:none; cursor:pointer; padding:0; color:var(--amber); margin-bottom:14px;" onclick="renameSelectedCustomer()">✏️ Rename the selected customer</button>
 
       <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
         <label style="margin-bottom:8px; display:block;">Add a new location</label>
         <input type="text" class="search-input" id="newAddrName" placeholder="Location name (e.g. LH Lacy J# 6056 The Cottages)" style="margin-bottom:8px;">
         <input type="text" class="search-input" id="newAddrValue" placeholder="Address, or coordinates like 33.2519, -96.5447" style="margin-bottom:8px;">
-        <select class="search-input" id="newAddrCustomer" style="margin-bottom:8px;" onchange="handleCustomerSelectChange(this)"></select>
+        <div class="strategy-row" style="margin-bottom:8px;">
+          <select class="search-input" style="margin-bottom:0;" id="newAddrCustomer" onchange="handleCustomerSelectChange(this)"></select>
+          <select class="search-input" style="margin-bottom:0;" id="newAddrType">
+            <option value="site">Site</option>
+            <option value="plant">Plant</option>
+          </select>
+        </div>
         <button class="btn-secondary" onclick="addNewCustomAddress()">+ Add to address book</button>
         <div id="newAddrStatus" class="tonnage-hint"></div>
+
+        <div class="strategy-row" style="margin-top:10px;">
+          <button class="btn-secondary" style="flex:1; margin:0;" onclick="document.getElementById('addrExcelInput').click()">📊 Import from Excel</button>
+          <button class="btn-secondary" style="flex:1; margin:0;" onclick="document.getElementById('addrPhotoInput').click()">📷 Scan photo</button>
+        </div>
+        <input type="file" id="addrExcelInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleAddrExcelUpload(event)">
+        <input type="file" id="addrPhotoInput" accept="image/*" capture="environment" style="display:none" onchange="handleAddrPhotoUpload(event)">
+        <div id="addrImportPreview"></div>
       </div>
 
       <div id="addrBookList"></div>
@@ -595,12 +616,12 @@ function getUniqueLocations(){
   const seen = new Map();
   ADDRESS_BOOK.forEach(row => {
     const pKey = row['Shipping Station'] + '|' + row['Shipping Address'];
-    if (!seen.has(pKey)) seen.set(pKey, { name: row['Shipping Station'], address: row['Shipping Address'], customer: defaultCustomerLabel });
+    if (!seen.has(pKey)) seen.set(pKey, { name: row['Shipping Station'], address: row['Shipping Address'], customer: defaultCustomerLabel, type: 'site' });
     const dKey = row['Amrize RMX Plant Name'] + '|' + row['Destination Address'];
-    if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'], customer: defaultCustomerLabel });
+    if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'], customer: defaultCustomerLabel, type: 'plant' });
   });
   customAddressCache.forEach(c => {
-    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, customer: c.customer || defaultCustomerLabel, custom: true });
+    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, customer: c.customer || defaultCustomerLabel, type: c.location_type || 'site', custom: true });
   });
   return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -609,10 +630,12 @@ async function addNewCustomAddress(){
   const nameInput = document.getElementById('newAddrName');
   const valueInput = document.getElementById('newAddrValue');
   const customerSelect = document.getElementById('newAddrCustomer');
+  const typeSelect = document.getElementById('newAddrType');
   const statusEl = document.getElementById('newAddrStatus');
   const name = nameInput.value.trim();
   const value = valueInput.value.trim();
   const customer = customerSelect.value;
+  const locationType = typeSelect.value;
 
   if (!name || !value) {
     statusEl.textContent = 'Enter both a name and an address (or coordinates).';
@@ -625,14 +648,14 @@ async function addNewCustomAddress(){
 
   statusEl.textContent = 'Saving...';
   try {
-    await fetchBridge('saveCustomAddress', { stationName: name, address: value, customer });
+    await fetchBridge('saveCustomAddress', { stationName: name, address: value, customer, locationType });
     const existing = customAddressCache.find(c => c.station_name.toLowerCase() === name.toLowerCase());
-    if (existing) { existing.address = value; existing.customer = customer; }
-    else customAddressCache.push({ station_name: name, address: value, customer });
+    if (existing) { existing.address = value; existing.customer = customer; existing.location_type = locationType; }
+    else customAddressCache.push({ station_name: name, address: value, customer, location_type: locationType });
 
     nameInput.value = '';
     valueInput.value = '';
-    statusEl.textContent = `✓ Added to ${customer} — future dispatches mentioning this name will auto-match.`;
+    statusEl.textContent = `✓ Added to ${customer} ${locationType === 'plant' ? 'Plants' : 'Sites'} — future dispatches mentioning this name will auto-match.`;
     populateCustomerDropdowns();
     document.getElementById('newAddrCustomer').value = customer;
     renderAddressBook();
@@ -641,13 +664,24 @@ async function addNewCustomAddress(){
   }
 }
 
+function companyBadgeLabel(customer, type){
+  if (!customer) return '';
+  // Auto-generated — no need to type "X Plants"/"X Sites" yourself, the
+  // badge next to each address always reflects whichever company AND type
+  // (plant or site) it's tagged with.
+  const clean = customer.trim().replace(/\s+(plants?|sites?)$/i, '');
+  return `${clean} ${type === 'plant' ? 'Plants' : 'Sites'}`;
+}
+
 function renderAddressBook(){
   const query = (document.getElementById('addrSearch').value || '').toLowerCase().trim();
   const customerFilter = document.getElementById('addrCustomerFilter').value;
+  const typeFilter = document.getElementById('addrTypeFilter').value;
   const list = getUniqueLocations().filter(loc => {
     const matchesQuery = !query || loc.name.toLowerCase().includes(query) || loc.address.toLowerCase().includes(query);
     const matchesCustomer = !customerFilter || loc.customer === customerFilter;
-    return matchesQuery && matchesCustomer;
+    const matchesType = !typeFilter || loc.type === typeFilter;
+    return matchesQuery && matchesCustomer && matchesType;
   });
   const container = document.getElementById('addrBookList');
   if (list.length === 0) {
@@ -656,7 +690,7 @@ function renderAddressBook(){
   }
   container.innerHTML = list.map(loc => `
     <div class="addr-entry">
-      <div class="addr-name">${escapeHtmlSafe(loc.name)} <span class="badge badge-text" style="font-size:9px;">${escapeHtmlSafe(loc.customer)}</span></div>
+      <div class="addr-name">${escapeHtmlSafe(loc.name)} <span class="badge badge-text" style="font-size:9px;">${escapeHtmlSafe(companyBadgeLabel(loc.customer, loc.type))}</span></div>
       <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
     </div>
   `).join('');
@@ -664,6 +698,130 @@ function renderAddressBook(){
 
 function escapeHtmlSafe(s){
   return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- ADDRESS BOOK BULK IMPORT (Excel / photo OCR) ----------
+
+let addressImportRows = []; // { name, address, include }
+
+function excelCellToStr(v){ return (v === undefined || v === null) ? '' : String(v).trim(); }
+
+async function handleAddrExcelUpload(event){
+  const file = event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+  const previewEl = document.getElementById('addrImportPreview');
+  previewEl.innerHTML = '<div class="plan-loading">Reading spreadsheet...</div>';
+
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    const parsed = rows.map(r => {
+      const keys = Object.keys(r);
+      const nameKey = keys.find(k => /^(name|location|station|site)/i.test(k.trim()));
+      const addrKey = keys.find(k => /^(address|addr)/i.test(k.trim()));
+      return { name: excelCellToStr(nameKey ? r[nameKey] : ''), address: excelCellToStr(addrKey ? r[addrKey] : ''), include: true };
+    }).filter(r => r.name || r.address);
+
+    if (parsed.length === 0) {
+      previewEl.innerHTML = '<div class="empty-hint">Could not find name/address columns. Make sure the sheet has headers like "Name" and "Address".</div>';
+      return;
+    }
+    addressImportRows = parsed;
+    renderAddrImportPreview();
+  } catch (err) {
+    previewEl.innerHTML = `<div class="empty-hint">Could not read that file — ${escapeHtmlSafe(err.message)}</div>`;
+  }
+}
+
+async function handleAddrPhotoUpload(event){
+  const file = event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+  const previewEl = document.getElementById('addrImportPreview');
+  previewEl.innerHTML = '<div class="plan-loading">Reading text from the photo... (first scan takes longer while the OCR engine loads)</div>';
+
+  try {
+    const result = await Tesseract.recognize(file, 'eng');
+    const text = (result.data.text || '').trim();
+    if (!text) {
+      previewEl.innerHTML = '<div class="empty-hint">Could not read any text from that photo — try a clearer, well-lit picture.</div>';
+      return;
+    }
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const parsed = lines.map(splitNameAddress).filter(r => r.name || r.address);
+    if (parsed.length === 0) {
+      previewEl.innerHTML = '<div class="empty-hint">Could not find any address-looking lines in that photo. Try Excel import instead, or add it manually above.</div>';
+      return;
+    }
+    addressImportRows = parsed;
+    renderAddrImportPreview();
+  } catch (err) {
+    previewEl.innerHTML = `<div class="empty-hint">Could not read that photo — ${escapeHtmlSafe(err.message)}</div>`;
+  }
+}
+
+// Best-effort split of one OCR'd line into a name and an address — looks for
+// where a street number starts (e.g. "Melissa Yard 2525 Throckmorton Rd..."),
+// since that's usually where the address portion begins. Always shown for
+// review before importing — OCR splits are approximate, never auto-applied.
+function splitNameAddress(line){
+  const match = line.match(/\d{1,6}\s+\S/);
+  if (match && match.index > 0) {
+    return { name: line.slice(0, match.index).trim().replace(/[,\-:]+$/, ''), address: line.slice(match.index).trim(), include: true };
+  }
+  const commaIdx = line.indexOf(',');
+  if (commaIdx > 0) {
+    return { name: line.slice(0, commaIdx).trim(), address: line.slice(commaIdx + 1).trim(), include: true };
+  }
+  return { name: line, address: '', include: true };
+}
+
+function renderAddrImportPreview(){
+  const previewEl = document.getElementById('addrImportPreview');
+  if (addressImportRows.length === 0) { previewEl.innerHTML = ''; return; }
+
+  const rowsHtml = addressImportRows.map((r, i) => `
+    <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+      <input type="checkbox" ${r.include ? 'checked' : ''} onchange="addressImportRows[${i}].include = this.checked">
+      <input class="search-input" style="margin-bottom:0;" value="${escapeHtmlSafe(r.name)}" onblur="addressImportRows[${i}].name = this.value" placeholder="Name">
+      <input class="search-input" style="margin-bottom:0;" value="${escapeHtmlSafe(r.address)}" onblur="addressImportRows[${i}].address = this.value" placeholder="Address">
+    </div>
+  `).join('');
+
+  previewEl.innerHTML = `
+    <div class="tonnage-hint" style="margin-top:10px;">Review before importing — spreadsheet/photo reads aren't always perfect. Uncheck or fix any row, then import. They'll all be tagged with whichever company is picked above.</div>
+    ${rowsHtml}
+    <button class="btn-secondary" onclick="confirmAddrImport()">+ Import ${addressImportRows.filter(r => r.include).length} addresses</button>
+  `;
+}
+
+async function confirmAddrImport(){
+  const customer = document.getElementById('newAddrCustomer').value;
+  const locationType = document.getElementById('newAddrType').value;
+  if (!customer || customer === '__new__') { alert('Pick or type a customer first (the dropdown above the import buttons).'); return; }
+  const toImport = addressImportRows.filter(r => r.include && r.name && r.address);
+  if (toImport.length === 0) { alert('Nothing checked to import, or a checked row is missing a name or address.'); return; }
+
+  const previewEl = document.getElementById('addrImportPreview');
+  previewEl.innerHTML = '<div class="plan-loading">Importing...</div>';
+  let success = 0, failed = 0;
+  for (const r of toImport) {
+    try {
+      await fetchBridge('saveCustomAddress', { stationName: r.name, address: r.address, customer, locationType });
+      const existing = customAddressCache.find(c => c.station_name.toLowerCase() === r.name.toLowerCase());
+      if (existing) { existing.address = r.address; existing.customer = customer; existing.location_type = locationType; }
+      else customAddressCache.push({ station_name: r.name, address: r.address, customer, location_type: locationType });
+      success++;
+    } catch (e) { failed++; }
+  }
+  addressImportRows = [];
+  populateCustomerDropdowns();
+  renderAddressBook();
+  previewEl.innerHTML = `<div class="empty-hint">✓ Imported ${success}${failed ? `, ${failed} failed` : ''}.</div>`;
 }
 
 let customAddressCache = [];
@@ -692,11 +850,12 @@ async function saveAddressForNextTime(fieldPrefix){
     return;
   }
 
+  const locationType = fieldPrefix === 'pickup' ? 'site' : 'plant';
   try {
-    await fetchBridge('saveCustomAddress', { stationName, address });
+    await fetchBridge('saveCustomAddress', { stationName, address, locationType });
     const existing = customAddressCache.find(c => c.station_name.toLowerCase() === stationName.toLowerCase());
-    if (existing) existing.address = address;
-    else customAddressCache.push({ station_name: stationName, address });
+    if (existing) { existing.address = address; existing.location_type = locationType; }
+    else customAddressCache.push({ station_name: stationName, address, location_type: locationType });
 
     if (fieldPrefix === 'pickup') { f.pickupSource = 'book'; f.pickupConfidence = 1; }
     else { f.deliverySource = 'book'; f.deliveryConfidence = 1; }
@@ -2700,7 +2859,8 @@ function getSiteOptions(company){
 
   return customAddressCache
     .filter(c => (c.customer || defaultCustomerLabel) === company)
-    .map(c => ({ key: 'LOC|||' + c.station_name, kind: 'location', name: c.station_name, label: c.station_name }))
+    .map(c => ({ key: 'LOC|||' + c.station_name, kind: 'location', name: c.station_name,
+      label: `${c.station_name} (${(c.location_type || 'site') === 'plant' ? 'Plant' : 'Site'})` }))
     .sort((a,b) => a.label.localeCompare(b.label));
 }
 

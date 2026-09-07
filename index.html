@@ -957,9 +957,7 @@ function matchLocation(text){
 
   // Check your own saved corrections first — an exact match here is fully
   // trusted (confidence 1), since you explicitly confirmed this address for
-  // this exact site name. Kept separate from the fuzzy word-overlap check
-  // below to avoid the same kind of false-positive that built-in book
-  // entries can produce on a partial word match.
+  // this exact site name.
   const customMatch = customAddressCache.find(c => normalize(c.station_name) === norm);
   if (customMatch) {
     return { matched: true, station: customMatch.station_name, address: customMatch.address, confidence: 1 };
@@ -967,27 +965,31 @@ function matchLocation(text){
 
   const words = norm.split(' ').filter(w => w.length > 2);
   let best = null, bestScore = 0;
-  ADDRESS_BOOK.forEach(row => {
-    [
-      {name: row['Shipping Station'], address: row['Shipping Address']},
-      {name: row['Amrize RMX Plant Name'], address: row['Destination Address']}
-    ].forEach(cand => {
-      const candNorm = normalize(cand.name);
-      const candWords = candNorm.split(' ');
-      let score = 0;
-      words.forEach(w => {
-        if (candNorm.includes(w)) { score++; return; }
-        // Typo tolerance — e.g. "melisa" vs "melissa" — only for longer,
-        // non-generic words, so short/common words don't fuzzy-match everywhere.
-        if (w.length >= 5 && !GENERIC_WORDS.has(w) &&
-            candWords.some(cw => cw.length >= 5 && !GENERIC_WORDS.has(cw) && levenshtein(w, cw) <= 1)) score++;
-      });
-      if(score > bestScore){
-        bestScore = score;
-        best = {station: cand.name.trim(), address: cand.address, confidence: score / Math.max(words.length,1)};
-      }
+  const scoreCandidate = (candName, candAddress) => {
+    const candNorm = normalize(candName);
+    const candWords = candNorm.split(' ');
+    let score = 0;
+    words.forEach(w => {
+      if (candNorm.includes(w)) { score++; return; }
+      // Typo tolerance — e.g. "melisa" vs "melissa" — only for longer,
+      // non-generic words, so short/common words don't fuzzy-match everywhere.
+      if (w.length >= 5 && !GENERIC_WORDS.has(w) &&
+          candWords.some(cw => cw.length >= 5 && !GENERIC_WORDS.has(cw) && levenshtein(w, cw) <= 1)) score++;
     });
+    if (score > bestScore) {
+      bestScore = score;
+      best = { station: candName.trim(), address: candAddress, confidence: score / Math.max(words.length, 1) };
+    }
+  };
+  ADDRESS_BOOK.forEach(row => {
+    scoreCandidate(row['Shipping Station'], row['Shipping Address']);
+    scoreCandidate(row['Amrize RMX Plant Name'], row['Destination Address']);
   });
+  // Also fuzzy-match your own saved addresses (any company) — a short
+  // reference like "United" should still find a saved "United Sand &
+  // Gravel Island Plant" entry, the same way it works for the built-in book.
+  customAddressCache.forEach(c => scoreCandidate(c.station_name, c.address));
+
   if(!best || bestScore === 0) return {matched:false, station:null, address:null, confidence:0};
   return {matched:true, ...best};
 }
@@ -1011,7 +1013,7 @@ function extractTime(text){
 }
 function explicitAddress(raw){
   if(!raw) return null;
-  const m = raw.match(/\d{1,6}\s+[A-Za-z0-9.\s]+,\s*[A-Za-z\s]+,?\s*TX\s*\d{5}/i);
+  const m = raw.match(/\d{1,6}\s+[A-Za-z0-9.\s]+?,?\s*[A-Za-z\s]*?,?\s*TX\s*\d{5}/i);
   return m ? m[0].trim() : null;
 }
 
@@ -1245,7 +1247,14 @@ function resolveFields(base, fullText){
     notes: /thumbs up|👍/i.test(fullText) ? 'Acknowledge with 👍' : ''
   };
 
-  if (pickupLink) {
+  if (base.pickupAddressGiven) {
+    // Name + full address given directly (e.g. a "Drop off/Pick up" block) —
+    // no need to guess via the address book at all.
+    fields.pickupStation = base.pickupRaw || '';
+    fields.pickupAddress = base.pickupAddressGiven;
+    fields.pickupSource = 'explicit';
+    fields.pickupConfidence = 1;
+  } else if (pickupLink) {
     // Coordinate-type load: skip fuzzy matching, use the clean site name as-is.
     fields.pickupStation = pickupRawClean || base.pickupRaw || '';
     fields.pickupAddress = pickupCoords ? `${pickupCoords.lat}, ${pickupCoords.lon}` : '';
@@ -1258,7 +1267,12 @@ function resolveFields(base, fullText){
     fields.pickupConfidence = pickupExplicit ? 1 : (pickupMatch.confidence || 0);
   }
 
-  if (deliveryLink) {
+  if (base.deliveryAddressGiven) {
+    fields.deliveryStation = base.deliveryRaw || '';
+    fields.deliveryAddress = base.deliveryAddressGiven;
+    fields.deliverySource = 'explicit';
+    fields.deliveryConfidence = 1;
+  } else if (deliveryLink) {
     fields.deliveryStation = deliveryRawClean || base.deliveryRaw || '';
     fields.deliveryAddress = deliveryCoords ? `${deliveryCoords.lat}, ${deliveryCoords.lon}` : '';
     fields.deliverySource = deliveryCoords ? 'explicit' : 'none';
@@ -1383,6 +1397,21 @@ function parseLoadLine(rawLine){
   }
   line = line.replace(/\.+$/, '').trim();
 
+  // A leading word (or two) before the quantity number — e.g. "amrize 2
+  // nonblend..." with no line break — is treated as an inline company label,
+  // same idea as a company name on its own line above the job.
+  let inlineCompany = '';
+  const leadWordMatch = line.match(/^([A-Za-z][A-Za-z&'.-]*(?:\s+[A-Za-z][A-Za-z&'.-]*)?)\s+(?=\d)/);
+  if (leadWordMatch) {
+    inlineCompany = leadWordMatch[1].trim();
+    line = line.slice(leadWordMatch[0].length);
+  }
+
+  const attachCompany = (result) => {
+    if (result && inlineCompany && !result.company) result.company = inlineCompany;
+    return result;
+  };
+
   const m = line.match(/^(\d+)\s*-?\s*(.+?)\s+to\s+(.+)$/i);
   if (m) {
     const beforeTo = m[2].trim();
@@ -1390,16 +1419,16 @@ function parseLoadLine(rawLine){
     if (beforeTo && deliveryRaw) {
       const { product, pickupRaw } = splitProductAndPickup(beforeTo);
       if (pickupRaw) {
-        return { quantity: m[1], product, pickupRaw, deliveryRaw, time };
+        return attachCompany({ quantity: m[1], product, pickupRaw, deliveryRaw, time });
       }
     }
   }
 
   const conv = parseConversationalLoadLine(line);
-  if (conv) return { ...conv, time };
+  if (conv) return attachCompany({ ...conv, time });
 
   const noTo = parseLoadLineNoTo(line);
-  if (noTo) return { ...noTo, time };
+  if (noTo) return attachCompany({ ...noTo, time });
 
   return null;
 }
@@ -1492,6 +1521,43 @@ function looksLikeCompanyLabelLine(line){
   return !!line && !/\d/.test(line) && /^[A-Za-z][A-Za-z\s&'.-]{0,40}$/.test(line) && line.split(/\s+/).length <= 4;
 }
 
+// Recognizes a "Drop off / Pick up" block — a job given as two labeled
+// sections (name on one line, its full address on the next) instead of the
+// usual "qty product pickup to delivery" shape, and usually with NO
+// quantity/product at all yet (those get filled in per-driver later, e.g.
+// when splitting a customer's order across several trucks). Handles either
+// section first, and either spelling of "Pick up"/"Pickup".
+function extractDropPickupJobs(lines){
+  const sections = [];
+  let i = 0;
+  while (i < lines.length) {
+    const isDrop = /^drop[\s-]?off$/i.test(lines[i]);
+    const isPick = /^pick[\s-]?up$/i.test(lines[i]);
+    if (!isDrop && !isPick) { i++; continue; }
+
+    let j = i + 1;
+    const body = [];
+    while (j < lines.length && lines[j] && !/^drop[\s-]?off$/i.test(lines[j]) && !/^pick[\s-]?up$/i.test(lines[j])) {
+      body.push(lines[j]);
+      j++;
+    }
+    sections.push({ type: isDrop ? 'drop' : 'pick', name: body[0] || '', address: body.slice(1).join(', ') || '', markerLine: i, endLine: j });
+    i = j;
+  }
+
+  const jobs = [];
+  for (let k = 0; k < sections.length - 1; k++) {
+    const a = sections[k], b = sections[k + 1];
+    if (a.type !== b.type) {
+      const pick = a.type === 'pick' ? a : b;
+      const drop = a.type === 'drop' ? a : b;
+      jobs.push({ pickup: pick, delivery: drop, startLine: a.markerLine, endLine: b.endLine });
+      k++; // consume both sections of the pair
+    }
+  }
+  return jobs;
+}
+
 // Splits into blocks so each job's OWN time/date/company doesn't get lost
 // or mixed up with another job's. Two ways a block boundary shows up:
 // a blank line, or a label line naming the company right before its job.
@@ -1499,9 +1565,37 @@ function detectMultipleLoads(text){
   const overallDate = extractDate(text);
   const rawLines = text.split('\n').map(l => l.trim());
 
+  // Pull out any "Drop off / Pick up" blocks first — they don't fit the
+  // line-by-line quantity parser at all, so they're handled separately and
+  // then removed from the text before the rest of the normal pipeline runs.
+  const dropPickupJobs = extractDropPickupJobs(rawLines);
+  const consumedLines = new Set();
+  const dropPickupItems = dropPickupJobs.map(job => {
+    // A short label line right before the pair (e.g. "Preferred") still
+    // tags the job with its company, same as for quantity-style jobs.
+    let company = '';
+    let labelLine = job.startLine - 1;
+    if (labelLine >= 0 && looksLikeCompanyLabelLine(rawLines[labelLine])) {
+      company = rawLines[labelLine];
+      consumedLines.add(labelLine);
+    }
+    for (let i = job.startLine; i < job.endLine; i++) consumedLines.add(i);
+
+    return {
+      quantity: '', product: '',
+      pickupRaw: job.pickup.name, pickupAddressGiven: job.pickup.address || null,
+      deliveryRaw: job.delivery.name, deliveryAddressGiven: job.delivery.address || null,
+      time: '', dayName: overallDate.dayName, date: overallDate.date,
+      company
+    };
+  });
+
+  const remainingLines = rawLines.filter((l, i) => !consumedLines.has(i));
+  const remainingText = remainingLines.join('\n');
+
   let hasCompanyMarkers = false;
-  for (let i = 0; i < rawLines.length - 1; i++) {
-    if (looksLikeCompanyLabelLine(rawLines[i]) && parseLoadLine(rawLines[i + 1])) {
+  for (let i = 0; i < remainingLines.length - 1; i++) {
+    if (looksLikeCompanyLabelLine(remainingLines[i]) && parseLoadLine(remainingLines[i + 1])) {
       hasCompanyMarkers = true;
       break;
     }
@@ -1511,10 +1605,15 @@ function detectMultipleLoads(text){
   if (hasCompanyMarkers) {
     blocks = [];
     let current = { company: '', lines: [] };
-    for (let i = 0; i < rawLines.length; i++) {
-      const l = rawLines[i];
-      if (!l) continue;
-      if (looksLikeCompanyLabelLine(l) && parseLoadLine(rawLines[i + 1])) {
+    for (let i = 0; i < remainingLines.length; i++) {
+      const l = remainingLines[i];
+      if (!l) {
+        // A blank line still starts a new sub-block (same company carried
+        // over) so two jobs under one company label don't share a time.
+        if (current.lines.length) { blocks.push(current); current = { company: current.company, lines: [] }; }
+        continue;
+      }
+      if (looksLikeCompanyLabelLine(l) && parseLoadLine(remainingLines[i + 1])) {
         if (current.lines.length) blocks.push(current);
         current = { company: l, lines: [] };
       } else {
@@ -1523,13 +1622,13 @@ function detectMultipleLoads(text){
     }
     if (current.lines.length) blocks.push(current);
   } else {
-    const rawBlocks = text.split(/\n\s*\n+/).map(b => b.trim()).filter(Boolean);
+    const rawBlocks = remainingText.split(/\n\s*\n+/).map(b => b.trim()).filter(Boolean);
     blocks = rawBlocks.length > 1
       ? rawBlocks.map(b => ({ company: '', lines: b.split('\n').map(l => l.trim()).filter(Boolean) }))
-      : [{ company: '', lines: rawLines.filter(Boolean) }];
+      : [{ company: '', lines: remainingLines.filter(Boolean) }];
   }
 
-  const items = [];
+  const items = [...dropPickupItems];
   blocks.forEach(block => {
     const blockText = block.lines.join('\n');
     const blockDate = extractDate(blockText);
@@ -1542,7 +1641,7 @@ function detectMultipleLoads(text){
           parsed.date = blockDate.date || overallDate.date;
         }
         if (!parsed.time) parsed.time = blockTime;
-        if (block.company) parsed.company = block.company;
+        if (block.company && !parsed.company) parsed.company = block.company;
         items.push(parsed);
       }
     });

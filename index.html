@@ -243,9 +243,10 @@
   }
   #dispatchPlanModal .modal-box{ max-width:1400px; }
   @media (max-width:700px){
-    .plan-table{ font-size:10px; }
-    .plan-cell-input{ min-width:44px; padding:2px 3px; font-size:10px; }
-    .plan-add-driver-select{ font-size:10px; }
+    .plan-table{ font-size:11px; }
+    .plan-cell-input{ min-width:52px; min-height:34px; padding:4px 4px; font-size:11px; }
+    .plan-add-driver-select{ font-size:11px; min-height:34px; }
+    .plan-table th, .plan-table td{ padding:5px 6px; }
   }
   .modal-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;}
   .modal-head h2{font-size:17px; margin:0; font-weight:600;}
@@ -2674,25 +2675,38 @@ async function syncGroupFields(groupKey, fieldsObj){
 // Known site pairs (pickup station -> Amrize plant), pulled from the same
 // address book used elsewhere in the app, each annotated with the real
 // rate/ton from the Amrize rate table when one matches.
-function getSiteOptions(){
-  const seen = new Map();
-  ADDRESS_BOOK.forEach(row => {
-    const station = row['Shipping Station'];
-    const plant = row['Amrize RMX Plant Name'];
-    const key = station + '|||' + plant;
-    if (seen.has(key)) return;
-    const rate = matchRate(station, plant);
-    seen.set(key, {
-      station, plant, key,
-      label: `${station} to ${plant}` + (rate.matched ? ` ($${rate.ratePerTon.toFixed(2)}/ton)` : ''),
-      ratePerTon: rate.matched ? rate.ratePerTon : null
+// Site options, filtered to the row's selected company:
+// - the built-in address book (Amrize pairs, with real rate/ton attached)
+//   only shows when the company matches that book's label (usually "Amrize")
+// - any other company shows just its own custom addresses from the address
+//   book viewer (no rate table for those — you set the rate yourself)
+function getSiteOptions(company){
+  if (!company || company === defaultCustomerLabel) {
+    const seen = new Map();
+    ADDRESS_BOOK.forEach(row => {
+      const station = row['Shipping Station'];
+      const plant = row['Amrize RMX Plant Name'];
+      const key = 'PAIR|||' + station + '|||' + plant;
+      if (seen.has(key)) return;
+      const rate = matchRate(station, plant);
+      seen.set(key, {
+        key, kind: 'pair', station, plant,
+        label: `${station} to ${plant}` + (rate.matched ? ` ($${rate.ratePerTon.toFixed(2)}/ton)` : ''),
+        ratePerTon: rate.matched ? rate.ratePerTon : null
+      });
     });
-  });
-  return Array.from(seen.values()).sort((a,b) => a.label.localeCompare(b.label));
+    return Array.from(seen.values()).sort((a,b) => a.label.localeCompare(b.label));
+  }
+
+  return customAddressCache
+    .filter(c => (c.customer || defaultCustomerLabel) === company)
+    .map(c => ({ key: 'LOC|||' + c.station_name, kind: 'location', name: c.station_name, label: c.station_name }))
+    .sort((a,b) => a.label.localeCompare(b.label));
 }
 
-// Handles the Site <select>: a known pair (auto-fills rate/ton from the real
-// rate table), or "+ Custom site..." for anything not in the address book.
+// Handles the Site <select>: a known Amrize pair (auto-fills rate/ton from
+// the real rate table), a custom address for the current company, or
+// "+ Custom site..." for anything not in either list.
 async function handleSiteSelectChange(groupKey, selectEl){
   const val = selectEl.value;
   if (val === '__custom__') {
@@ -2705,12 +2719,18 @@ async function handleSiteSelectChange(groupKey, selectEl){
     return;
   }
   if (!val) return;
-  const [station, plant] = val.split('|||');
-  const label = `${station} to ${plant}`;
-  const rate = matchRate(station, plant);
-  const fields = { site: label };
-  if (rate.matched) fields.rate_per_ton = rate.ratePerTon;
-  await syncGroupFields(groupKey, fields);
+
+  if (val.startsWith('PAIR|||')) {
+    const [, station, plant] = val.split('|||');
+    const label = `${station} to ${plant}`;
+    const rate = matchRate(station, plant);
+    const fields = { site: label };
+    if (rate.matched) fields.rate_per_ton = rate.ratePerTon;
+    await syncGroupFields(groupKey, fields);
+  } else if (val.startsWith('LOC|||')) {
+    const name = val.slice('LOC|||'.length);
+    await syncGroupFields(groupKey, { site: name });
+  }
 }
 
 async function pushGroupFields(group){
@@ -2912,12 +2932,13 @@ function renderPlanDashboard(startDate, endDate){
       <option value="__new__">+ Add new company...</option>
     </select></td>`;
 
-    const knownSites = getSiteOptions();
-    const siteMatchesKnown = knownSites.some(s => (s.station + ' to ' + s.plant) === g.site);
+    const knownSites = getSiteOptions(g.company);
+    const siteLabelFor = s => s.kind === 'pair' ? (s.station + ' to ' + s.plant) : s.name;
+    const siteMatchesKnown = knownSites.some(s => siteLabelFor(s) === g.site);
     const siteCell = `<td class="plan-site-cell"><select class="plan-cell-input" onchange="handleSiteSelectChange('${gk}', this)">
       ${!g.site ? '<option value="" selected>Select...</option>' : ''}
       ${!siteMatchesKnown && g.site ? `<option value="" selected>${escapeHtmlSafe(g.site)}</option>` : ''}
-      ${knownSites.map(s => `<option value="${escapeHtmlSafe(s.key)}" ${(s.station+' to '+s.plant)===g.site ? 'selected' : ''}>${escapeHtmlSafe(s.label)}</option>`).join('')}
+      ${knownSites.map(s => `<option value="${escapeHtmlSafe(s.key)}" ${siteLabelFor(s)===g.site ? 'selected' : ''}>${escapeHtmlSafe(s.label)}</option>`).join('')}
       <option value="__custom__">+ Custom site...</option>
     </select></td>`;
 

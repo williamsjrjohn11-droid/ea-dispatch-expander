@@ -68,6 +68,8 @@
   .field-grid{display:grid; grid-template-columns:1fr; gap:10px;}
   .field{display:flex; flex-direction:column; gap:5px;}
   .field-label{font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:.04em; font-weight:600; display:flex; justify-content:space-between; align-items:center;}
+  .book-picker-icon{ cursor:pointer; font-size:18px; line-height:1; padding:8px; margin:-8px; display:inline-flex; align-items:center; justify-content:center; }
+  .remove-driver-icon{ cursor:pointer; color:var(--text3); font-size:14px; padding:9px 6px; margin:-9px -6px -9px 3px; display:inline-flex; align-items:center; justify-content:center; }
   .badge{font-size:10px; padding:2px 6px; border-radius:100px; font-weight:700; letter-spacing:.03em;}
   .badge-book{background:var(--green-dim); color:var(--green);}
   .badge-text{background:var(--panel2); color:var(--text-dim); border:1px solid var(--border2);}
@@ -2076,7 +2078,7 @@ function renderFields(){
     const showSaveBtn = isAddressField && isLow && val;
     const isStationField = key === 'pickupStation' || key === 'deliveryStation';
     return `<div class="field">
-      <div class="field-label"><span>${label}</span>${badge}${isStationField ? ` <span style="cursor:pointer;" title="Pick from address book" onclick="openLocationPicker('${fieldPrefix}')">📖</span>` : ''}</div>
+      <div class="field-label"><span>${label}</span>${badge}${isStationField ? ` <span class="book-picker-icon" title="Pick from address book" onclick="openLocationPicker('${fieldPrefix}')">📖</span>` : ''}</div>
       <input type="text" class="${isLow?'needs-review':''}" value="${(val||'').replace(/"/g,'&quot;')}"
         placeholder="${placeholder}" oninput="updateField('${key}', this.value)">
       ${isAddressField ? `<div id="saveBtnContainer_${fieldPrefix}">${showSaveBtn ? saveButtonHtml(fieldPrefix) : ''}</div>` : ''}
@@ -3778,7 +3780,11 @@ async function handleCompanySelectChange(groupKey, selectEl){
 async function addDriverToGroup(groupKey, driverName){
   if (!driverName) return;
   const group = findGroup(groupKey);
-  if (!group) return;
+  if (!group) {
+    alert('Could not find this row anymore — it may have just been edited or reloaded. Please try again; if it keeps happening, let John know.');
+    renderPlanDashboard(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
+    return;
+  }
   if (group.drivers[driverName]) return; // already there
 
   if (!group.date || !group.rate_per_ton) {
@@ -3796,14 +3802,30 @@ async function addDriverToGroup(groupKey, driverName){
     loads_to_give: 0, group_id: group.group_id || undefined };
   try {
     const result = await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
+    if (!result || result.success === false) {
+      alert('The save didn\'t go through — ' + (result && result.error ? result.error : 'no confirmation came back from the server') + '. Try again.');
+      console.error('addDriverToGroup: unexpected savePlannedLoad result', result);
+      return;
+    }
     // First driver on a brand-new row: the backend just minted a group_id —
     // store it on the (still-referenced) draft object so every driver added
     // after this one, and any field edit, reuses the same id instead of
     // drifting apart.
     if (!group.group_id && result.group_id) group.group_id = result.group_id;
     await loadDispatchPlanData();
+
+    // The save can report success but the row still not show up here — most
+    // often because its date falls outside the current date filter. Catch
+    // that and say so plainly instead of leaving it looking like the driver
+    // just vanished.
+    const stillThere = buildPlanGroups(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value)
+      .some(g => g.drivers && g.drivers[driverName] && (g.group_id === group.group_id || g.key === group.key));
+    if (!stillThere) {
+      alert(`${driverName} was saved, but isn't showing in this view. The most likely reason: this row's date (${payload.date || 'blank'}) falls outside the date range shown at the top of the planning grid — widen that range and check again.`);
+    }
   } catch (err) {
-    alert('Could not add driver — ' + err.message);
+    console.error('addDriverToGroup failed', err);
+    alert('Could not add driver — ' + err.message + '. Check your connection and try again; if it keeps happening, open the browser console (F12) and send a screenshot of any red error.');
   }
 }
 
@@ -3922,7 +3944,7 @@ function renderPlanDashboard(startDate, endDate){
       const c = completionFor(name, g.date);
       const issued = (Number(d.loads_to_give) || 0) * ratePerLoad;
       return `<td style="white-space:nowrap;"><input class="plan-cell-input" type="number" style="width:60px;" value="${d.loads_to_give}" onblur="syncDriverAssigned('${gk}','${escapeHtmlSafe(name).replace(/'/g,"\\'")}', this.value)">` +
-        `<span style="cursor:pointer; color:var(--text3); margin-left:2px;" title="Remove ${escapeHtmlSafe(name)} from this row" onclick="deletePlannedLoadUI('${d.plan_id}')">✕</span></td>` +
+        `<span class="remove-driver-icon" title="Remove ${escapeHtmlSafe(name)} from this row" onclick="deletePlannedLoadUI('${d.plan_id}')">✕</span></td>` +
         `<td class="plan-computed">${c.count}${c.pending ? '*' : ''}</td>` +
         `<td class="plan-computed">${fmtMoney(issued)}</td>` +
         `<td class="plan-computed">${fmtMoney(c.dollars)}</td>`;

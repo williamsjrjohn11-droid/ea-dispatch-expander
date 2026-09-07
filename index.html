@@ -389,8 +389,9 @@
             <option value="site">Site</option>
           </select>
         </div>
-        <button class="btn-secondary" onclick="addNewCustomAddress()">+ Add to address book</button>
+        <button class="btn-secondary" onclick="addNewCustomAddress()" id="newAddrSubmitBtn">+ Add to address book</button>
         <div id="newAddrStatus" class="tonnage-hint"></div>
+        <button class="off-toggle" id="cancelAddrEditBtn" style="display:none; background:none; border:none; cursor:pointer; padding:0; color:var(--amber); margin-top:6px;" onclick="cancelAddrEdit()">✕ Cancel edit</button>
 
         <div class="strategy-row" style="margin-top:10px;">
           <button class="btn-secondary" style="flex:1; margin:0;" onclick="document.getElementById('addrExcelInput').click()">📊 Import from Excel</button>
@@ -630,6 +631,8 @@ function getUniqueLocations(){
   return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+let editingAddrOriginalName = null; // set while editing an existing entry
+
 async function addNewCustomAddress(){
   const nameInput = document.getElementById('newAddrName');
   const valueInput = document.getElementById('newAddrValue');
@@ -650,22 +653,59 @@ async function addNewCustomAddress(){
     return;
   }
 
-  statusEl.textContent = 'Saving...';
+  const wasEditing = editingAddrOriginalName;
+  const renamed = wasEditing && wasEditing.toLowerCase() !== name.toLowerCase();
+
+  statusEl.textContent = wasEditing ? 'Updating...' : 'Saving...';
   try {
     await fetchBridge('saveCustomAddress', { stationName: name, address: value, customer, locationType });
     const existing = customAddressCache.find(c => c.station_name.toLowerCase() === name.toLowerCase());
     if (existing) { existing.address = value; existing.customer = customer; existing.location_type = locationType; }
     else customAddressCache.push({ station_name: name, address: value, customer, location_type: locationType });
 
-    nameInput.value = '';
-    valueInput.value = '';
-    statusEl.textContent = `✓ Added to ${customer} ${locationType === 'plant' ? 'Plants' : 'Sites'} — future dispatches mentioning this name will auto-match.`;
+    if (renamed) {
+      await fetchBridge('deleteCustomAddress', { stationName: wasEditing });
+      customAddressCache = customAddressCache.filter(c => c.station_name.toLowerCase() !== wasEditing.toLowerCase());
+    }
+
+    cancelAddrEdit(); // clears the form and edit-mode state
+    statusEl.textContent = wasEditing
+      ? `✓ Updated — now ${customer} ${locationType === 'plant' ? 'Plants' : 'Sites'}.`
+      : `✓ Added to ${customer} ${locationType === 'plant' ? 'Plants' : 'Sites'} — future dispatches mentioning this name will auto-match.`;
     populateCustomerDropdowns();
     document.getElementById('newAddrCustomer').value = customer;
     renderAddressBook();
   } catch (err) {
     statusEl.textContent = 'Could not save — check your connection and try again.';
   }
+}
+
+// Populates the "Add a new location" form from an existing entry so it can
+// be edited (e.g. flipping Site <-> Plant) instead of retyping it.
+function editAddressEntry(index){
+  const loc = addrBookListCache[index];
+  if (!loc) return;
+  editingAddrOriginalName = loc.name;
+
+  document.getElementById('newAddrName').value = loc.name;
+  document.getElementById('newAddrValue').value = loc.address;
+  populateCustomerDropdowns();
+  document.getElementById('newAddrCustomer').value = loc.customer;
+  document.getElementById('newAddrType').value = loc.type;
+  document.getElementById('newAddrSubmitBtn').textContent = '✓ Update address';
+  document.getElementById('cancelAddrEditBtn').style.display = 'block';
+  document.getElementById('newAddrStatus').textContent = `Editing "${loc.name}" — change anything below, then tap Update address.`;
+  document.getElementById('newAddrName').scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+}
+
+function cancelAddrEdit(){
+  editingAddrOriginalName = null;
+  document.getElementById('newAddrName').value = '';
+  document.getElementById('newAddrValue').value = '';
+  document.getElementById('newAddrType').value = 'plant';
+  document.getElementById('newAddrSubmitBtn').textContent = '+ Add to address book';
+  document.getElementById('cancelAddrEditBtn').style.display = 'none';
+  document.getElementById('newAddrStatus').textContent = '';
 }
 
 function companyBadgeLabel(customer, type){
@@ -677,6 +717,8 @@ function companyBadgeLabel(customer, type){
   return `${clean} ${type === 'plant' ? 'Plants' : 'Sites'}`;
 }
 
+let addrBookListCache = [];
+
 function renderAddressBook(){
   const query = (document.getElementById('addrSearch').value || '').toLowerCase().trim();
   const customerFilter = document.getElementById('addrCustomerFilter').value;
@@ -687,14 +729,15 @@ function renderAddressBook(){
     const matchesType = !typeFilter || loc.type === typeFilter;
     return matchesQuery && matchesCustomer && matchesType;
   });
+  addrBookListCache = list;
   const container = document.getElementById('addrBookList');
   if (list.length === 0) {
     container.innerHTML = '<div class="empty-hint">No matches found.</div>';
     return;
   }
-  container.innerHTML = list.map(loc => `
-    <div class="addr-entry">
-      <div class="addr-name">${escapeHtmlSafe(loc.name)} <span class="badge badge-text" style="font-size:9px;">${escapeHtmlSafe(companyBadgeLabel(loc.customer, loc.type))}</span></div>
+  container.innerHTML = list.map((loc, i) => `
+    <div class="addr-entry" style="cursor:pointer;" onclick="editAddressEntry(${i})">
+      <div class="addr-name">${escapeHtmlSafe(loc.name)} <span class="badge badge-text" style="font-size:9px;">${escapeHtmlSafe(companyBadgeLabel(loc.customer, loc.type))}</span> <span style="color:var(--text3); font-size:11px;">✏️</span></div>
       <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
     </div>
   `).join('');

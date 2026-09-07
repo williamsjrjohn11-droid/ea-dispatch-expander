@@ -407,6 +407,17 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="locationPickerModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2 id="locationPickerTitle">Pick a location</h2>
+        <button class="modal-close" onclick="closeModal('locationPickerModal')">Close</button>
+      </div>
+      <input type="text" class="search-input" id="locationPickerSearch" placeholder="Search by name or address..." oninput="renderLocationPickerResults()">
+      <div id="locationPickerResults"></div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="helpModal">
     <div class="modal-box">
       <div class="modal-head">
@@ -820,6 +831,20 @@ function detectLaneRateSheet(aoa){
   return lanes.length ? lanes : null;
 }
 
+function describeFlatAddressStatus(name, address, rate){
+  const existing = customAddressCache.find(c => c.station_name.trim().toLowerCase() === (name || '').trim().toLowerCase());
+  if (!existing) return 'new';
+  const addrChanged = (existing.address || '').trim() !== (address || '').trim();
+  const rateChanged = rate !== '' && rate !== undefined && rate !== null && Number(existing.rate_per_ton) !== Number(rate);
+  return (addrChanged || rateChanged) ? 'update' : 'unchanged';
+}
+function annotateFlatAddressStatuses(rows){
+  return rows.map(r => {
+    const status = describeFlatAddressStatus(r.name, r.address, r.rate);
+    return { ...r, status, include: status !== 'unchanged' };
+  });
+}
+
 async function handleAddrExcelUpload(event){
   const file = event.target.files[0];
   event.target.value = '';
@@ -837,7 +862,7 @@ async function handleAddrExcelUpload(event){
     const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
     const lanes = detectLaneRateSheet(aoa);
     if (lanes) {
-      laneImportRows = lanes;
+      laneImportRows = annotateLaneStatuses(lanes);
       renderLaneImportPreview();
       return;
     }
@@ -858,7 +883,7 @@ async function handleAddrExcelUpload(event){
       previewEl.innerHTML = '<div class="empty-hint">Could not find name/address columns. Make sure the sheet has headers like "Name" and "Address".</div>';
       return;
     }
-    addressImportRows = parsed;
+    addressImportRows = annotateFlatAddressStatuses(parsed);
     renderAddrImportPreview();
   } catch (err) {
     previewEl.innerHTML = `<div class="empty-hint">Could not read that file — ${escapeHtmlSafe(err.message)}</div>`;
@@ -885,7 +910,7 @@ async function handleAddrPhotoUpload(event){
       previewEl.innerHTML = '<div class="empty-hint">Could not find any address-looking lines in that photo. Try Excel import instead, or add it manually above.</div>';
       return;
     }
-    addressImportRows = parsed;
+    addressImportRows = annotateFlatAddressStatuses(parsed);
     renderAddrImportPreview();
   } catch (err) {
     previewEl.innerHTML = `<div class="empty-hint">Could not read that photo — ${escapeHtmlSafe(err.message)}</div>`;
@@ -915,6 +940,7 @@ function renderAddrImportPreview(){
   const rowsHtml = addressImportRows.map((r, i) => `
     <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
       <input type="checkbox" ${r.include ? 'checked' : ''} onchange="addressImportRows[${i}].include = this.checked">
+      ${laneStatusBadge(r.status || 'new')}
       <input class="search-input" style="margin-bottom:0; flex:2;" value="${escapeHtmlSafe(r.name)}" onblur="addressImportRows[${i}].name = this.value" placeholder="Name">
       <input class="search-input" style="margin-bottom:0; flex:3;" value="${escapeHtmlSafe(r.address)}" onblur="addressImportRows[${i}].address = this.value" placeholder="Address">
       <input class="search-input" type="number" step="0.01" style="margin-bottom:0; flex:1; min-width:70px;" value="${r.rate === '' ? '' : r.rate}" onblur="addressImportRows[${i}].rate = this.value === '' ? '' : parseFloat(this.value)" placeholder="$/ton">
@@ -922,8 +948,11 @@ function renderAddrImportPreview(){
   `).join('');
 
   const rateCount = addressImportRows.filter(r => r.rate !== '' && r.rate !== undefined && r.rate !== null).length;
+  const newCount = addressImportRows.filter(r => (r.status || 'new') === 'new').length;
+  const updateCount = addressImportRows.filter(r => r.status === 'update').length;
+  const unchangedCount = addressImportRows.filter(r => r.status === 'unchanged').length;
   previewEl.innerHTML = `
-    <div class="tonnage-hint" style="margin-top:10px;">Review before importing — spreadsheet/photo reads aren't always perfect. Uncheck or fix any row, then import. They'll all be tagged with whichever company is picked above.${rateCount ? ` Found a rate for ${rateCount} row(s) — it'll prefill Rate/Ton when you pick that site in Dispatch Planning.` : ''}</div>
+    <div class="tonnage-hint" style="margin-top:10px;">Review before importing — spreadsheet/photo reads aren't always perfect. Uncheck or fix any row, then import. They'll all be tagged with whichever company is picked above. ${newCount} new, ${updateCount} changed, ${unchangedCount} already up to date (unchecked automatically).${rateCount ? ` Found a rate for ${rateCount} row(s) — it'll prefill Rate/Ton when you pick that site in Dispatch Planning.` : ''}</div>
     ${rowsHtml}
     <button class="btn-secondary" onclick="confirmAddrImport()">+ Import ${addressImportRows.filter(r => r.include).length} addresses</button>
   `;
@@ -957,6 +986,52 @@ async function confirmAddrImport(){
 
 // ---------- LANE-RATE IMPORT (origin -> destination pairs, not flat addresses) ----------
 
+// ---------- IMPORT CHECKER — new vs. already-there vs. changed ----------
+// The list grows and this sheet gets re-uploaded as more rows get added, so
+// every import needs to say plainly what's actually going to change instead
+// of silently re-saving everything — an old rate sitting in an outdated copy
+// of the sheet could otherwise quietly clobber a rate you've since corrected.
+
+function describeAddressStatus(name, address, hours){
+  const existing = customAddressCache.find(c => c.station_name.trim().toLowerCase() === (name || '').trim().toLowerCase());
+  if (!existing) return { status: 'new' };
+  const addrChanged = (existing.address || '').trim() !== (address || '').trim();
+  const hoursChanged = (existing.hours || '').trim() !== (hours || '').trim();
+  if (addrChanged || hoursChanged) return { status: 'update', old: existing };
+  return { status: 'unchanged' };
+}
+
+function describeRateStatus(company, origin, dest, rate){
+  const existing = customRatesCache.find(r =>
+    (r.company || '').toLowerCase() === (company || '').toLowerCase() &&
+    (r.origin_name || '').toLowerCase() === (origin || '').toLowerCase() &&
+    (r.destination_name || '').toLowerCase() === (dest || '').toLowerCase());
+  if (!existing) return { status: 'new' };
+  if (Number(existing.rate_per_ton) !== Number(rate)) return { status: 'update', old: existing.rate_per_ton };
+  return { status: 'unchanged' };
+}
+
+// Tags each lane with what importing it would actually do, and unchecks
+// anything that's a byte-for-byte repeat of what's already saved — so
+// re-uploading a bigger version of the same sheet only surfaces what's
+// actually new or different, not everything all over again.
+function annotateLaneStatuses(lanes){
+  return lanes.map(l => {
+    const originCheck = describeAddressStatus(l.originName, l.originAddress, l.originHours);
+    const destCheck = describeAddressStatus(l.destName, l.destAddress, l.destHours);
+    const rateCheck = describeRateStatus(l.company, l.originName, l.destName, l.rate);
+    const statuses = [originCheck.status, destCheck.status, rateCheck.status];
+    const overall = statuses.includes('update') ? 'update' : statuses.includes('new') ? 'new' : 'unchanged';
+    return { ...l, originCheck, destCheck, rateCheck, overall, include: overall !== 'unchanged' };
+  });
+}
+
+function laneStatusBadge(status){
+  if (status === 'new') return '<span class="badge badge-book" style="font-size:9px;">NEW</span>';
+  if (status === 'update') return '<span class="badge badge-review" style="font-size:9px;">CHANGED</span>';
+  return '<span class="badge badge-text" style="font-size:9px;">unchanged</span>';
+}
+
 function renderLaneImportPreview(){
   const previewEl = document.getElementById('addrImportPreview');
   if (laneImportRows.length === 0) { previewEl.innerHTML = ''; return; }
@@ -965,9 +1040,11 @@ function renderLaneImportPreview(){
     <div style="border:1px solid var(--border2); border-radius:8px; padding:10px; margin-bottom:8px;">
       <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
         <input type="checkbox" ${r.include ? 'checked' : ''} onchange="laneImportRows[${i}].include = this.checked">
+        ${laneStatusBadge(r.overall)}
         <input class="search-input" style="margin-bottom:0; flex:1;" value="${escapeHtmlSafe(r.company)}" onblur="laneImportRows[${i}].company = this.value" placeholder="Company">
         <input class="search-input" type="number" step="0.01" style="margin-bottom:0; width:90px;" value="${r.rate || ''}" onblur="laneImportRows[${i}].rate = parseFloat(this.value) || 0" placeholder="$/ton">
       </div>
+      ${r.rateCheck.status === 'update' ? `<div class="tonnage-hint" style="margin-bottom:6px; color:var(--amber);">Rate changing: $${Number(r.rateCheck.old).toFixed(2)} → $${Number(r.rate).toFixed(2)}/ton</div>` : ''}
       <div class="strategy-row" style="margin-bottom:6px;">
         <div style="flex:1;">
           <input class="search-input" style="margin-bottom:4px;" value="${escapeHtmlSafe(r.originName)}" onblur="laneImportRows[${i}].originName = this.value" placeholder="Origin name">
@@ -983,8 +1060,12 @@ function renderLaneImportPreview(){
     </div>
   `).join('');
 
+  const newCount = laneImportRows.filter(r => r.overall === 'new').length;
+  const updateCount = laneImportRows.filter(r => r.overall === 'update').length;
+  const unchangedCount = laneImportRows.filter(r => r.overall === 'unchanged').length;
+
   previewEl.innerHTML = `
-    <div class="tonnage-hint" style="margin-top:10px;">Detected a lane rate sheet — each row is an origin → destination pair with its own rate, not a single address. Review before importing: each lane saves both locations (as Plants) plus the rate for that exact pair, so Dispatch Planning can pull the right rate automatically once you pick that lane as a site.</div>
+    <div class="tonnage-hint" style="margin-top:10px;">Detected a lane rate sheet — each row is an origin → destination pair with its own rate, not a single address. ${newCount} new, ${updateCount} changed, ${unchangedCount} already up to date (unchecked automatically). Anything marked CHANGED shows exactly what's different before it overwrites the saved value.</div>
     ${rowsHtml}
     <button class="btn-secondary" onclick="confirmLaneImport()">+ Import ${laneImportRows.filter(r => r.include).length} lanes</button>
   `;
@@ -1993,8 +2074,9 @@ function renderFields(){
     const placeholder = isAddressField ? 'No address? Paste coordinates like 33.2519, -96.5447' : '';
     const fieldPrefix = key.startsWith('pickup') ? 'pickup' : 'delivery';
     const showSaveBtn = isAddressField && isLow && val;
+    const isStationField = key === 'pickupStation' || key === 'deliveryStation';
     return `<div class="field">
-      <div class="field-label"><span>${label}</span>${badge}</div>
+      <div class="field-label"><span>${label}</span>${badge}${isStationField ? ` <span style="cursor:pointer;" title="Pick from address book" onclick="openLocationPicker('${fieldPrefix}')">📖</span>` : ''}</div>
       <input type="text" class="${isLow?'needs-review':''}" value="${(val||'').replace(/"/g,'&quot;')}"
         placeholder="${placeholder}" oninput="updateField('${key}', this.value)">
       ${isAddressField ? `<div id="saveBtnContainer_${fieldPrefix}">${showSaveBtn ? saveButtonHtml(fieldPrefix) : ''}</div>` : ''}
@@ -2002,6 +2084,52 @@ function renderFields(){
   }).join('');
 
   document.getElementById('fieldsPanel').style.display = 'block';
+}
+
+// ---------- ADDRESS BOOK PICKER (for the Pickup/Delivery location fields) ----------
+
+let locationPickerTarget = null; // 'pickup' or 'delivery'
+let locationPickerResultsCache = [];
+
+function openLocationPicker(fieldPrefix){
+  locationPickerTarget = fieldPrefix;
+  document.getElementById('locationPickerTitle').textContent = `Pick a ${fieldPrefix} location`;
+  document.getElementById('locationPickerSearch').value = '';
+  document.getElementById('locationPickerModal').classList.add('show');
+  renderLocationPickerResults();
+}
+
+function renderLocationPickerResults(){
+  const query = (document.getElementById('locationPickerSearch').value || '').toLowerCase().trim();
+  const list = getUniqueLocations().filter(loc =>
+    !query || loc.name.toLowerCase().includes(query) || loc.address.toLowerCase().includes(query));
+  locationPickerResultsCache = list;
+  const container = document.getElementById('locationPickerResults');
+
+  if (list.length === 0) {
+    container.innerHTML = '<div class="empty-hint">No matches found.</div>';
+    return;
+  }
+
+  container.innerHTML = list.map((loc, i) => `
+    <div class="addr-entry" style="cursor:pointer;" onclick="selectLocationForField(${i})">
+      <div class="addr-name">${escapeHtmlSafe(loc.name)} <span class="badge badge-text" style="font-size:9px;">${escapeHtmlSafe(companyBadgeLabel(loc.customer, loc.type))}</span></div>
+      <div class="addr-line">${escapeHtmlSafe(loc.address)}</div>
+    </div>
+  `).join('');
+}
+
+function selectLocationForField(index){
+  const loc = locationPickerResultsCache[index];
+  if (!loc || !locationPickerTarget) return;
+  const prefix = locationPickerTarget;
+  updateField(prefix === 'pickup' ? 'pickupStation' : 'deliveryStation', loc.name);
+  updateField(prefix === 'pickup' ? 'pickupAddress' : 'deliveryAddress', loc.address);
+  if (prefix === 'pickup') { currentFields.pickupSource = 'book'; currentFields.pickupConfidence = 1; }
+  else { currentFields.deliverySource = 'book'; currentFields.deliveryConfidence = 1; }
+  closeModal('locationPickerModal');
+  renderFields();
+  renderOutput();
 }
 
 function saveButtonHtml(fieldPrefix){

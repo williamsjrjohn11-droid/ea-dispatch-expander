@@ -934,8 +934,26 @@ function normalize(str){
   return (str || '').toUpperCase().replace(/[.,#"'’”″′]/g,'').replace(/\s+/g,' ').trim();
 }
 
+function levenshtein(a, b){
+  const dp = [];
+  for (let i = 0; i <= a.length; i++) dp.push([i, ...Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++){
+    for (let j = 1; j <= b.length; j++){
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1]);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
 function matchLocation(text){
   const norm = normalize(text);
+  // Generic facility words that shouldn't participate in typo-fuzzy matching
+  // — otherwise a real place name like "Plano" can accidentally fuzzy-match
+  // the word "plant" (both 5 letters, 1 edit apart) in every single plant
+  // name in the book. Exact substring matching still uses them normally;
+  // this exclusion only applies to the looser edit-distance fallback.
+  const GENERIC_WORDS = new Set(['READY','MIX','PLANT','PLANTS','YARD','CRUSHED','STONE','SAND','GRAVEL','STATION','RMX']);
 
   // Check your own saved corrections first — an exact match here is fully
   // trusted (confidence 1), since you explicitly confirmed this address for
@@ -955,8 +973,15 @@ function matchLocation(text){
       {name: row['Amrize RMX Plant Name'], address: row['Destination Address']}
     ].forEach(cand => {
       const candNorm = normalize(cand.name);
+      const candWords = candNorm.split(' ');
       let score = 0;
-      words.forEach(w => { if(candNorm.includes(w)) score++; });
+      words.forEach(w => {
+        if (candNorm.includes(w)) { score++; return; }
+        // Typo tolerance — e.g. "melisa" vs "melissa" — only for longer,
+        // non-generic words, so short/common words don't fuzzy-match everywhere.
+        if (w.length >= 5 && !GENERIC_WORDS.has(w) &&
+            candWords.some(cw => cw.length >= 5 && !GENERIC_WORDS.has(cw) && levenshtein(w, cw) <= 1)) score++;
+      });
       if(score > bestScore){
         bestScore = score;
         best = {station: cand.name.trim(), address: cand.address, confidence: score / Math.max(words.length,1)};
@@ -972,8 +997,17 @@ function extractDate(text){
   return m ? {dayName:m[1]||'', date:m[2]} : {dayName:'', date:''};
 }
 function extractTime(text){
-  const m = text.match(/(\d{1,2}(:\d{2})?\s?(am|pm|AM|PM))/);
-  return m ? m[1].replace(/\s+/g,'') : '';
+  const m = text.match(/(\d{1,4})(:\d{2})?\s?(am|pm|AM|PM)/);
+  if (!m) return '';
+  const [, digits, colonPart, meridiem] = m;
+  if (!colonPart && digits.length >= 3) {
+    // Shorthand like "530am" (5:30) or "1230pm" (12:30) — last two digits
+    // are minutes, whatever's left is the hour.
+    const mins = digits.slice(-2);
+    const hrs = digits.slice(0, -2);
+    return `${hrs}:${mins}${meridiem.toLowerCase()}`;
+  }
+  return (digits + (colonPart || '') + meridiem).replace(/\s+/g, '').toLowerCase();
 }
 function explicitAddress(raw){
   if(!raw) return null;
@@ -1205,6 +1239,7 @@ function resolveFields(base, fullText){
     dayName: base.dayName || '',
     date: base.date || '',
     time: base.time || '',
+    company: base.company || '',
     pickupMapsLink: pickupLink,
     deliveryMapsLink: deliveryLink,
     notes: /thumbs up|👍/i.test(fullText) ? 'Acknowledge with 👍' : ''
@@ -1305,13 +1340,46 @@ function parseConversationalLoadLine(line){
   return { quantity, product, pickupRaw, deliveryRaw };
 }
 
+// Fallback for a job line with no literal "to" at all — e.g. "2 nonblend
+// Ambrose Lewisville". Tries every possible split point and keeps the one
+// where BOTH sides actually match a known pickup/delivery location — never
+// guesses a split that doesn't check out against the address book, since a
+// wrong split here would silently send a load to the wrong place.
+function parseLoadLineNoTo(line){
+  const m = line.match(/^(\d+)\s*-?\s*(.+)$/);
+  if (!m) return null;
+  const quantity = m[1];
+  const words = m[2].trim().split(/\s+/).filter(Boolean);
+  if (words.length < 2) return null;
+
+  let best = null;
+  for (let i = words.length - 1; i >= 1; i--) {
+    const deliveryCandidate = words.slice(i).join(' ');
+    const deliveryMatch = matchLocation(deliveryCandidate);
+    if (!deliveryMatch.matched) continue;
+
+    const beforeTo = words.slice(0, i).join(' ');
+    const { product, pickupRaw } = splitProductAndPickup(beforeTo);
+    if (!pickupRaw) continue;
+    const pickupMatch = matchLocation(pickupRaw);
+    if (!pickupMatch.matched) continue;
+
+    const score = deliveryMatch.confidence + pickupMatch.confidence;
+    if (!best || score > best.score) {
+      best = { score, product, pickupRaw, deliveryRaw: deliveryCandidate };
+    }
+  }
+  if (!best) return null;
+  return { quantity, product: best.product, pickupRaw: best.pickupRaw, deliveryRaw: best.deliveryRaw };
+}
+
 function parseLoadLine(rawLine){
   let line = rawLine.trim();
   if (!line) return null;
 
   const time = extractTime(line);
   if (time) {
-    line = line.replace(/(\d{1,2}(:\d{2})?\s?(am|pm))/i, '').trim();
+    line = line.replace(/(\d{1,4}(:\d{2})?\s?(am|pm))/i, '').trim();
   }
   line = line.replace(/\.+$/, '').trim();
 
@@ -1329,6 +1397,9 @@ function parseLoadLine(rawLine){
 
   const conv = parseConversationalLoadLine(line);
   if (conv) return { ...conv, time };
+
+  const noTo = parseLoadLineNoTo(line);
+  if (noTo) return { ...noTo, time };
 
   return null;
 }
@@ -1413,23 +1484,68 @@ function detectEmailTableRows(text){
   return rows;
 }
 
+// A short, digit-free line is treated as a company label ONLY if the very
+// next line actually parses as a job — this doesn't depend on the company
+// being "known" already (so a brand-new company name works immediately),
+// while still not misfiring on random short lines that aren't labels.
+function looksLikeCompanyLabelLine(line){
+  return !!line && !/\d/.test(line) && /^[A-Za-z][A-Za-z\s&'.-]{0,40}$/.test(line) && line.split(/\s+/).length <= 4;
+}
+
+// Splits into blocks so each job's OWN time/date/company doesn't get lost
+// or mixed up with another job's. Two ways a block boundary shows up:
+// a blank line, or a label line naming the company right before its job.
 function detectMultipleLoads(text){
-  const sharedDate = extractDate(text);
-  const sharedTime = extractTime(text);
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const items = [];
-  lines.forEach(line => {
-    const parsed = parseLoadLine(line);
-    if (parsed) {
-      if (!parsed.dayName && !parsed.date) {
-        parsed.dayName = sharedDate.dayName;
-        parsed.date = sharedDate.date;
-      }
-      if (!parsed.time) {
-        parsed.time = sharedTime;
-      }
-      items.push(parsed);
+  const overallDate = extractDate(text);
+  const rawLines = text.split('\n').map(l => l.trim());
+
+  let hasCompanyMarkers = false;
+  for (let i = 0; i < rawLines.length - 1; i++) {
+    if (looksLikeCompanyLabelLine(rawLines[i]) && parseLoadLine(rawLines[i + 1])) {
+      hasCompanyMarkers = true;
+      break;
     }
+  }
+
+  let blocks;
+  if (hasCompanyMarkers) {
+    blocks = [];
+    let current = { company: '', lines: [] };
+    for (let i = 0; i < rawLines.length; i++) {
+      const l = rawLines[i];
+      if (!l) continue;
+      if (looksLikeCompanyLabelLine(l) && parseLoadLine(rawLines[i + 1])) {
+        if (current.lines.length) blocks.push(current);
+        current = { company: l, lines: [] };
+      } else {
+        current.lines.push(l);
+      }
+    }
+    if (current.lines.length) blocks.push(current);
+  } else {
+    const rawBlocks = text.split(/\n\s*\n+/).map(b => b.trim()).filter(Boolean);
+    blocks = rawBlocks.length > 1
+      ? rawBlocks.map(b => ({ company: '', lines: b.split('\n').map(l => l.trim()).filter(Boolean) }))
+      : [{ company: '', lines: rawLines.filter(Boolean) }];
+  }
+
+  const items = [];
+  blocks.forEach(block => {
+    const blockText = block.lines.join('\n');
+    const blockDate = extractDate(blockText);
+    const blockTime = extractTime(blockText);
+    block.lines.forEach(line => {
+      const parsed = parseLoadLine(line);
+      if (parsed) {
+        if (!parsed.dayName && !parsed.date) {
+          parsed.dayName = blockDate.dayName || overallDate.dayName;
+          parsed.date = blockDate.date || overallDate.date;
+        }
+        if (!parsed.time) parsed.time = blockTime;
+        if (block.company) parsed.company = block.company;
+        items.push(parsed);
+      }
+    });
   });
   return items;
 }

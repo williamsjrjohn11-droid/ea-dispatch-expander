@@ -1132,6 +1132,7 @@ function runParse(){
   if (emailRows.length === 1) {
     currentFields = resolveFields(emailRows[0], text);
     document.getElementById('multiLoadPanel').style.display = 'none';
+    checkJobNeedsDetails();
     renderFields();
     renderOutput();
     return;
@@ -1152,6 +1153,7 @@ function runParse(){
       // with the stricter fallback.
       currentFields = resolveFields(items[0], text);
       document.getElementById('multiLoadPanel').style.display = 'none';
+      checkJobNeedsDetails();
       renderFields();
       renderOutput();
       return;
@@ -1164,8 +1166,26 @@ function runParse(){
   currentFields = resolveFields(base, text);
 
   document.getElementById('multiLoadPanel').style.display = 'none';
+  checkJobNeedsDetails();
   renderFields();
   renderOutput();
+}
+
+// A lightweight "foolproof" check — if a job is missing its material or
+// quantity (typically a Drop off/Pick up job that didn't state them up
+// front), ask for them right away instead of silently leaving blank fields
+// that would otherwise slip into a driver's message unnoticed.
+function checkJobNeedsDetails(){
+  const f = currentFields;
+  if (!f) return;
+  if (!f.product) {
+    const product = window.prompt('What material are you hauling for this load?');
+    if (product && product.trim()) f.product = product.trim();
+  }
+  if (!f.quantity) {
+    const qty = window.prompt('How many total loads for this job?');
+    if (qty && qty.trim() && !isNaN(parseInt(qty, 10))) f.quantity = qty.trim();
+  }
 }
 
 // Turns a parsed "base" object (quantity/product/pickupRaw/deliveryRaw/time/
@@ -1527,6 +1547,13 @@ function looksLikeCompanyLabelLine(line){
 // quantity/product at all yet (those get filled in per-driver later, e.g.
 // when splitting a customer's order across several trucks). Handles either
 // section first, and either spelling of "Pick up"/"Pickup".
+// A line made entirely of one repeated symbol (***, ---, ===, ___, ~~~) —
+// a common visual separator between blocks. Treated the same as a blank
+// line everywhere blocks get split.
+function isSeparatorLine(line){
+  return /^([*\-=_~])\1{2,}$/.test((line || '').trim());
+}
+
 function extractDropPickupJobs(lines){
   const sections = [];
   let i = 0;
@@ -1535,9 +1562,13 @@ function extractDropPickupJobs(lines){
     const isPick = /^pick[\s-]?up$/i.test(lines[i]);
     if (!isDrop && !isPick) { i++; continue; }
 
+    // Every example is a name line then an address line — capped at 2 so a
+    // missing blank line (or separator) afterward can't swallow whatever
+    // comes next into this section by mistake.
     let j = i + 1;
     const body = [];
-    while (j < lines.length && lines[j] && !/^drop[\s-]?off$/i.test(lines[j]) && !/^pick[\s-]?up$/i.test(lines[j])) {
+    while (j < lines.length && body.length < 2 && lines[j] && !isSeparatorLine(lines[j]) &&
+           !/^drop[\s-]?off$/i.test(lines[j]) && !/^pick[\s-]?up$/i.test(lines[j])) {
       body.push(lines[j]);
       j++;
     }
@@ -1590,7 +1621,7 @@ function detectMultipleLoads(text){
     };
   });
 
-  const remainingLines = rawLines.filter((l, i) => !consumedLines.has(i));
+  const remainingLines = rawLines.filter((l, i) => !consumedLines.has(i)).map(l => isSeparatorLine(l) ? '' : l);
   const remainingText = remainingLines.join('\n');
 
   let hasCompanyMarkers = false;
@@ -1633,18 +1664,31 @@ function detectMultipleLoads(text){
     const blockText = block.lines.join('\n');
     const blockDate = extractDate(blockText);
     const blockTime = extractTime(blockText);
-    block.lines.forEach(line => {
+    for (let idx = 0; idx < block.lines.length; idx++) {
+      const line = block.lines[idx];
       const parsed = parseLoadLine(line);
-      if (parsed) {
-        if (!parsed.dayName && !parsed.date) {
-          parsed.dayName = blockDate.dayName || overallDate.dayName;
-          parsed.date = blockDate.date || overallDate.date;
-        }
-        if (!parsed.time) parsed.time = blockTime;
-        if (block.company && !parsed.company) parsed.company = block.company;
-        items.push(parsed);
+      if (!parsed) continue;
+      if (!parsed.dayName && !parsed.date) {
+        parsed.dayName = blockDate.dayName || overallDate.dayName;
+        parsed.date = blockDate.date || overallDate.date;
       }
-    });
+      if (!parsed.time) {
+        // No inline time on this job's own line — check the very next line
+        // for a bare time (e.g. "6am" on its own) before falling back to
+        // sharing the block's first time. This is what lets two jobs sit
+        // right next to each other with no blank line between them and
+        // still each get their own time.
+        const nextLine = block.lines[idx + 1];
+        if (nextLine && /^\d{1,4}(:\d{2})?\s?(am|pm)$/i.test(nextLine.trim())) {
+          parsed.time = extractTime(nextLine);
+          idx++; // that line's spoken for — don't reconsider it as its own line
+        } else {
+          parsed.time = blockTime;
+        }
+      }
+      if (block.company && !parsed.company) parsed.company = block.company;
+      items.push(parsed);
+    }
   });
   return items;
 }
@@ -1675,6 +1719,12 @@ function renderMultiLoadChips(){
 function loadMultiLoadItem(index){
   activeMultiLoadIndex = index;
   currentFields = multiLoadItems[index];
+  // Only prompt once per job — flip a flag so switching back to a chip you
+  // already answered (or skipped) doesn't ask again.
+  if (!currentFields.detailsChecked) {
+    currentFields.detailsChecked = true;
+    checkJobNeedsDetails();
+  }
   renderMultiLoadChips();
   renderFields();
   renderOutput();
@@ -1684,7 +1734,12 @@ function renderFields(){
   const f = currentFields;
   const grid = document.getElementById('fieldGrid');
   const needsReview = f.pickupConfidence < 0.5 || f.deliveryConfidence < 0.5;
-  document.getElementById('reviewBanner').classList.toggle('show', needsReview);
+  const missingDetails = !f.quantity || !f.product;
+  const banner = document.getElementById('reviewBanner');
+  banner.classList.toggle('show', needsReview || missingDetails);
+  banner.textContent = missingDetails
+    ? 'Missing quantity and/or material for this load — fill them in below before sending.'
+    : 'Some fields couldn\'t be matched confidently — check them below before sending.';
 
   const rows = [
     ['quantity','How many loads', f.quantity, null],
@@ -1994,6 +2049,13 @@ function setAssignment(driverName, value){
     delete assignments[driverName];
   } else {
     assignments[driverName] = n;
+    // Last-chance catch — if the material still isn't set (e.g. the
+    // earlier prompt got cancelled), don't let a driver message go out
+    // with a blank "Product -" line.
+    if (!currentFields.product) {
+      const product = window.prompt('What material are you hauling for this load? (needed before sending to a driver)');
+      if (product && product.trim()) { currentFields.product = product.trim(); renderFields(); }
+    }
   }
   updateTotals();
   renderDriverMessages();

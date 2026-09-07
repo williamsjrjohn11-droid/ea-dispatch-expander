@@ -1178,25 +1178,26 @@ function runParse(){
 // Builds a short "which job is this" tag for the confirmation prompts —
 // company + pickup→delivery — so answering is never a guess, especially
 // with multiple companies/loads in one paste.
+// Builds "for Preferred" / "for the United → Ameritex load" — woven right
+// into the question itself, not just shown as a reference tag — so it
+// reads naturally instead of leaving the company as an afterthought.
 function describeJobForPrompt(f){
-  const parts = [];
-  if (f.company) parts.push(f.company);
+  if (f.company) return `for ${f.company}`;
   const route = [f.pickupStation, f.deliveryStation].filter(Boolean).join(' → ');
-  if (route) parts.push(route);
-  return parts.join(': ');
+  if (route) return `for the ${route} load`;
+  return '';
 }
 
 function checkJobNeedsDetails(){
   const f = currentFields;
   if (!f) return;
   const desc = describeJobForPrompt(f);
-  const suffix = desc ? `\n\n(${desc})` : '';
   if (!f.product) {
-    const product = window.prompt(`What material are you hauling for this load?${suffix}`);
+    const product = window.prompt(desc ? `What material are you hauling ${desc}?` : 'What material are you hauling for this load?');
     if (product && product.trim()) f.product = product.trim();
   }
   if (!f.quantity) {
-    const qty = window.prompt(`How many total loads for this job?${suffix}`);
+    const qty = window.prompt(desc ? `How many total loads ${desc}?` : 'How many total loads for this job?');
     if (qty && qty.trim() && !isNaN(parseInt(qty, 10))) f.quantity = qty.trim();
   }
 }
@@ -2067,8 +2068,10 @@ function setAssignment(driverName, value){
     // with a blank "Product -" line.
     if (!currentFields.product) {
       const desc = describeJobForPrompt(currentFields);
-      const suffix = desc ? `\n\n(${desc})` : '';
-      const product = window.prompt(`What material are you hauling for this load? (needed before sending to a driver)${suffix}`);
+      const question = desc
+        ? `What material are you hauling ${desc}? (needed before sending to a driver)`
+        : 'What material are you hauling for this load? (needed before sending to a driver)';
+      const product = window.prompt(question);
       if (product && product.trim()) { currentFields.product = product.trim(); renderFields(); }
     }
   }

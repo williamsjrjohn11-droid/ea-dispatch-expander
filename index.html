@@ -2789,9 +2789,10 @@ async function loadDispatchPlanData(){
     ]);
     planCache = planData.plans || [];
     planCompletionCache = compData.completion || {};
-    // Drop drafts that now exist for real (matched by date+site+company)
-    const realKeys = new Set(planCache.map(p => [p.date, p.site, p.company].join('||')));
-    planDraftGroups = planDraftGroups.filter(g => !realKeys.has([g.date, g.site, g.company].join('||')));
+    // Drop drafts that now exist for real — matched by group_id, once the
+    // draft's first driver has actually been saved and assigned one.
+    const realGroupIds = new Set(planCache.map(p => p.group_id).filter(Boolean));
+    planDraftGroups = planDraftGroups.filter(g => !(g.group_id && realGroupIds.has(g.group_id)));
 
     renderPlanDashboard(startDate, endDate);
     renderPlanProjection();
@@ -2815,10 +2816,15 @@ function buildPlanGroups(startDate, endDate){
   const order = [];
 
   rows.forEach(p => {
-    const key = [p.date, p.site, p.company].join('||');
+    // Grouped by the row's permanent group_id, NOT by date/site/company text
+    // — those are editable, and a driver added before an edit and one added
+    // after would otherwise no longer match, silently splitting one row
+    // into two. Rows saved before group_id existed get one backfilled
+    // automatically the first time the sheet loads (see the backend).
+    const key = p.group_id || p.plan_id; // fallback just in case a row somehow has neither
     if (!groups[key]) {
       groups[key] = {
-        key, date: p.date, site: p.site, company: p.company,
+        key, group_id: p.group_id, date: p.date, site: p.site, company: p.company,
         rate_per_ton: p.rate_per_ton, tons_per_load: p.tons_per_load,
         rate_per_load: p.rate_per_load, weeks_fsc: p.weeks_fsc,
         drivers: {}
@@ -2839,7 +2845,7 @@ function buildPlanGroups(startDate, endDate){
 function addDraftRow(){
   const key = 'draft_' + Date.now();
   planDraftGroups.push({
-    key, date: formatDateKey(new Date()), site: '', company: '',
+    key, group_id: null, date: formatDateKey(new Date()), site: '', company: '',
     rate_per_ton: 0, tons_per_load: 25, rate_per_load: 0, weeks_fsc: 0, drivers: {}
   });
   const startDate = document.getElementById('planFilterStart').value;
@@ -2970,7 +2976,7 @@ async function pushGroupFields(group){
   await Promise.all(driverEntries.map(([driverName, d]) => {
     const payload = { date: group.date, site: group.site, company: group.company,
       rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
-      rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc };
+      rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc, group_id: group.group_id || undefined };
     return fetchBridge('updatePlannedLoad', { planId: d.plan_id, payload: JSON.stringify(payload) });
   }));
   await loadDispatchPlanData();
@@ -3013,9 +3019,14 @@ async function addDriverToGroup(groupKey, driverName){
   const payload = { date: group.date, driver: driverName, site: group.site, company: group.company,
     rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
     rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc,
-    loads_to_give: 0 };
+    loads_to_give: 0, group_id: group.group_id || undefined };
   try {
-    await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
+    const result = await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
+    // First driver on a brand-new row: the backend just minted a group_id —
+    // store it on the (still-referenced) draft object so every driver added
+    // after this one, and any field edit, reuses the same id instead of
+    // drifting apart.
+    if (!group.group_id && result.group_id) group.group_id = result.group_id;
     await loadDispatchPlanData();
   } catch (err) {
     alert('Could not add driver — ' + err.message);
@@ -3033,13 +3044,14 @@ async function syncDriverAssigned(groupKey, driverName, rawValue){
   const payload = { date: group.date, driver: driverName, site: group.site, company: group.company,
     rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
     rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc,
-    loads_to_give: loadsToGive };
+    loads_to_give: loadsToGive, group_id: group.group_id || undefined };
 
   try {
     if (existing && existing.plan_id) {
       await fetchBridge('updatePlannedLoad', { planId: existing.plan_id, payload: JSON.stringify(payload) });
     } else {
-      await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
+      const result = await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
+      if (!group.group_id && result.group_id) group.group_id = result.group_id;
     }
     await loadDispatchPlanData();
   } catch (err) {
@@ -3135,7 +3147,8 @@ function renderPlanDashboard(startDate, endDate){
       if (!d) return '<td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td>';
       const c = completionFor(name, g.date);
       const issued = (Number(d.loads_to_give) || 0) * ratePerLoad;
-      return `<td><input class="plan-cell-input" type="number" value="${d.loads_to_give}" onblur="syncDriverAssigned('${gk}','${escapeHtmlSafe(name).replace(/'/g,"\\'")}', this.value)"></td>` +
+      return `<td style="white-space:nowrap;"><input class="plan-cell-input" type="number" style="width:60px;" value="${d.loads_to_give}" onblur="syncDriverAssigned('${gk}','${escapeHtmlSafe(name).replace(/'/g,"\\'")}', this.value)">` +
+        `<span style="cursor:pointer; color:var(--text3); margin-left:2px;" title="Remove ${escapeHtmlSafe(name)} from this row" onclick="deletePlannedLoadUI('${d.plan_id}')">✕</span></td>` +
         `<td class="plan-computed">${c.count}${c.pending ? '*' : ''}</td>` +
         `<td class="plan-computed">${fmtMoney(issued)}</td>` +
         `<td class="plan-computed">${fmtMoney(c.dollars)}</td>`;

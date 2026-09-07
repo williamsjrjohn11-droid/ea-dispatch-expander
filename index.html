@@ -241,6 +241,12 @@
     background:var(--panel); border:1px solid var(--border2); border-radius:12px;
     max-width:600px; width:100%; margin-top:40px; padding:20px; max-height:85vh; overflow-y:auto;
   }
+  #dispatchPlanModal .modal-box{ max-width:1400px; }
+  @media (max-width:700px){
+    .plan-table{ font-size:10px; }
+    .plan-cell-input{ min-width:44px; padding:2px 3px; font-size:10px; }
+    .plan-add-driver-select{ font-size:10px; }
+  }
   .modal-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;}
   .modal-head h2{font-size:17px; margin:0; font-weight:600;}
   .modal-close{width:auto; margin:0; padding:6px 12px; background:var(--panel2); color:var(--text-dim);}
@@ -2594,7 +2600,8 @@ function buildPlanGroups(startDate, endDate){
     if (!groups[key]) {
       groups[key] = {
         key, date: p.date, site: p.site, company: p.company,
-        rate_per_ton: p.rate_per_ton, tons_per_load: p.tons_per_load, weeks_fsc: p.weeks_fsc,
+        rate_per_ton: p.rate_per_ton, tons_per_load: p.tons_per_load,
+        rate_per_load: p.rate_per_load, weeks_fsc: p.weeks_fsc,
         drivers: {}
       };
       order.push(key);
@@ -2614,7 +2621,7 @@ function addDraftRow(){
   const key = 'draft_' + Date.now();
   planDraftGroups.push({
     key, date: formatDateKey(new Date()), site: '', company: '',
-    rate_per_ton: 0, tons_per_load: 25, weeks_fsc: 0, drivers: {}
+    rate_per_ton: 0, tons_per_load: 25, rate_per_load: 0, weeks_fsc: 0, drivers: {}
   });
   const startDate = document.getElementById('planFilterStart').value;
   const endDate = document.getElementById('planFilterEnd').value;
@@ -2626,29 +2633,70 @@ function findGroup(groupKey){
     .find(g => g.key === groupKey);
 }
 
-// Called on blur of any shared base-field input (date/site/company/rate/tons/fsc).
+// Companies already known to the app: everything in the address book's
+// customer list, plus any company already used in a saved planning row, plus
+// anything typed in fresh this session via "+ Add new company...".
+let extraPlanCompanies = [];
+function getKnownCompanies(){
+  const set = new Set(getKnownCustomers());
+  planCache.forEach(p => { if (p.company) set.add(p.company); });
+  extraPlanCompanies.forEach(c => set.add(c));
+  return Array.from(set).filter(Boolean).sort();
+}
+
+// Called on blur of any shared base-field input (date/site/rate/tons/fsc) —
+// company changes come through handleCompanySelectChange instead.
 // If the group already has saved driver rows, pushes the change to all of them.
 async function syncGroupBaseField(groupKey, field, rawValue){
   const group = findGroup(groupKey);
   if (!group) return;
 
-  const value = ['rate_per_ton','tons_per_load','weeks_fsc'].includes(field) ? (parseFloat(rawValue) || 0) : rawValue;
+  const value = ['rate_per_ton','tons_per_load','rate_per_load','weeks_fsc'].includes(field) ? (parseFloat(rawValue) || 0) : rawValue;
   group[field] = value;
 
+  // If rate/ton or tons/load changed and rate/load hasn't been set yet,
+  // suggest a starting rate/load — but never overwrite one already typed in.
+  if ((field === 'rate_per_ton' || field === 'tons_per_load') && !group.rate_per_load) {
+    group.rate_per_load = (Number(group.tons_per_load) || 0) * (Number(group.rate_per_ton) || 0);
+  }
+
+  await pushGroupFields(group);
+}
+
+async function pushGroupFields(group){
   const driverEntries = Object.entries(group.drivers);
   if (driverEntries.length === 0) {
     // Nothing saved yet for this row — just keep it in the draft until a
     // driver is added, at which point the current field values get sent.
     if (!planDraftGroups.find(g => g.key === group.key)) planDraftGroups.push(group);
+    else renderPlanDashboard(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
     return;
   }
 
   await Promise.all(driverEntries.map(([driverName, d]) => {
     const payload = { date: group.date, site: group.site, company: group.company,
-      rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load, weeks_fsc: group.weeks_fsc };
+      rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
+      rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc };
     return fetchBridge('updatePlannedLoad', { planId: d.plan_id, payload: JSON.stringify(payload) });
   }));
   await loadDispatchPlanData();
+}
+
+// Handles the Company <select> in a row: a normal pick, or "+ Add new
+// company..." which prompts for a name and adds it to the known list.
+async function handleCompanySelectChange(groupKey, selectEl){
+  if (selectEl.value === '__new__') {
+    const name = window.prompt('New company name:');
+    if (!name || !name.trim()) {
+      renderPlanDashboard(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
+      return;
+    }
+    const clean = name.trim();
+    if (!extraPlanCompanies.includes(clean)) extraPlanCompanies.push(clean);
+    await syncGroupBaseField(groupKey, 'company', clean);
+  } else {
+    await syncGroupBaseField(groupKey, 'company', selectEl.value);
+  }
 }
 
 // Called when picking a driver from a row's "+ driver" select — adds them to
@@ -2666,9 +2714,11 @@ async function addDriverToGroup(groupKey, driverName){
     renderPlanDashboard(startDate, endDate);
     return;
   }
+  if (!group.rate_per_load) group.rate_per_load = (Number(group.tons_per_load) || 0) * (Number(group.rate_per_ton) || 0);
 
   const payload = { date: group.date, driver: driverName, site: group.site, company: group.company,
-    rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load, weeks_fsc: group.weeks_fsc,
+    rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
+    rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc,
     loads_to_give: 0 };
   try {
     await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
@@ -2684,9 +2734,11 @@ async function syncDriverAssigned(groupKey, driverName, rawValue){
   if (!group) return;
   const loadsToGive = parseFloat(rawValue) || 0;
   const existing = group.drivers[driverName];
+  if (!group.rate_per_load) group.rate_per_load = (Number(group.tons_per_load) || 0) * (Number(group.rate_per_ton) || 0);
 
   const payload = { date: group.date, driver: driverName, site: group.site, company: group.company,
-    rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load, weeks_fsc: group.weeks_fsc,
+    rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
+    rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc,
     loads_to_give: loadsToGive };
 
   try {
@@ -2712,7 +2764,7 @@ async function deletePlannedLoadUI(planId){
 }
 
 function computedRatePerLoad(group){
-  return (Number(group.tons_per_load) || 0) * (Number(group.rate_per_ton) || 0);
+  return Number(group.rate_per_load) || 0;
 }
 function computedRowTotal(group){
   const ratePerLoad = computedRatePerLoad(group);
@@ -2776,10 +2828,13 @@ function renderPlanDashboard(startDate, endDate){
     '<th>Assigned</th><th>Completed</th><th>Issued $</th><th>Completed $</th>'
   ).join('') + '<th>Add driver</th>';
 
+  const knownCompanies = getKnownCompanies();
+
   const bodyRows = groups.map(g => {
     const ratePerLoad = computedRatePerLoad(g);
     const rowTotal = computedRowTotal(g);
     const gk = escapeHtmlSafe(g.key);
+    const basedOff = (Number(g.tons_per_load) || 0) * (Number(g.rate_per_ton) || 0);
 
     const driverCells = driverNames.map(name => {
       const d = g.drivers[name];
@@ -2798,12 +2853,25 @@ function renderPlanDashboard(startDate, endDate){
       ${availableDrivers.map(d => `<option value="${escapeHtmlSafe(d.name)}">${escapeHtmlSafe(d.name)}</option>`).join('')}
     </select></td>`;
 
+    const companyOptions = knownCompanies.map(c =>
+      `<option value="${escapeHtmlSafe(c)}" ${c === g.company ? 'selected' : ''}>${escapeHtmlSafe(c)}</option>`
+    ).join('');
+    const companyCell = `<td><select class="plan-cell-input" onchange="handleCompanySelectChange('${gk}', this)">
+      ${!g.company ? '<option value="" selected>Select...</option>' : ''}
+      ${companyOptions}
+      <option value="__new__">+ Add new company...</option>
+    </select></td>`;
+
     return `<tr>
       <td><input class="plan-cell-input" type="date" value="${g.date}" onblur="syncGroupBaseField('${gk}','date', this.value)"></td>
       <td class="plan-site-cell"><input class="plan-cell-input" type="text" value="${escapeHtmlSafe(g.site)}" placeholder="Site" onblur="syncGroupBaseField('${gk}','site', this.value)"></td>
-      <td><input class="plan-cell-input" type="text" value="${escapeHtmlSafe(g.company)}" placeholder="Company" onblur="syncGroupBaseField('${gk}','company', this.value)"></td>
+      ${companyCell}
       <td><input class="plan-cell-input" type="number" step="0.01" value="${g.rate_per_ton}" onblur="syncGroupBaseField('${gk}','rate_per_ton', this.value)"></td>
       <td><input class="plan-cell-input" type="number" step="0.01" value="${g.tons_per_load}" onblur="syncGroupBaseField('${gk}','tons_per_load', this.value)"></td>
+      <td>
+        <input class="plan-cell-input" type="number" step="0.01" value="${ratePerLoad}" onblur="syncGroupBaseField('${gk}','rate_per_load', this.value)">
+        <div class="report-stat-label" style="white-space:normal;">based off: ${fmtMoney(basedOff)}</div>
+      </td>
       <td class="plan-computed">${fmtMoney(rowTotal)}</td>
       ${driverCells}
       ${addDriverCell}
@@ -2811,7 +2879,7 @@ function renderPlanDashboard(startDate, endDate){
   }).join('');
 
   const totalsRow = `<tr>
-    <td colspan="6">All entries</td>
+    <td colspan="7">All entries</td>
     ${driverNames.map(name => {
       let a = 0, c = 0, i = 0, cd = 0;
       groups.forEach(g => {
@@ -2832,14 +2900,14 @@ function renderPlanDashboard(startDate, endDate){
     <div class="plan-table-wrap">
       <table class="plan-table">
         <thead>
-          <tr><th colspan="6">Entry</th>${driverHeaderRow}</tr>
-          <tr><th>Date</th><th>Site</th><th>Company</th><th>Rate/Ton</th><th>Tons/Load</th><th>Total</th>${driverSubHeaderRow}</tr>
+          <tr><th colspan="7">Entry</th>${driverHeaderRow}</tr>
+          <tr><th>Date</th><th>Site</th><th>Company</th><th>Rate/Ton</th><th>Tons/Load</th><th>Rate/Load</th><th>Total</th>${driverSubHeaderRow}</tr>
         </thead>
         <tbody>${bodyRows}</tbody>
         <tfoot>${totalsRow}</tfoot>
       </table>
     </div>
-    <div class="empty-hint">Type directly into any cell — it saves when you tap away. Completed / Completed $ come from real Tickets data and can't be typed in. * = estimated, not yet settled.</div>
+    <div class="empty-hint">Type directly into any cell — it saves when you tap away. Rate/Load is yours to set (a "based off" hint shows Tons/Load × Rate/Ton for reference). Completed / Completed $ come from real Tickets data and can't be typed in. * = estimated, not yet settled.</div>
   `;
 }
 
@@ -2903,7 +2971,7 @@ function exportPlanExcel(){
     const ratePerLoad = computedRatePerLoad(g);
     const row = {
       'Date': g.date, 'Site': g.site, 'Company': g.company,
-      'Rate/Ton': g.rate_per_ton, 'Tons/Load': g.tons_per_load, 'Total': computedRowTotal(g)
+      'Rate/Ton': g.rate_per_ton, 'Tons/Load': g.tons_per_load, 'Rate/Load': ratePerLoad, 'Total': computedRowTotal(g)
     };
     driverNames.forEach(name => {
       const d = g.drivers[name];
@@ -2941,7 +3009,7 @@ function exportPlanPDF(){
       const issued = d.loads_to_give * ratePerLoad;
       return `<td>${d.loads_to_give}</td><td>${c.count}${c.pending ? '*' : ''}</td><td>${fmtMoney(issued)}</td><td>${fmtMoney(c.dollars)}</td>`;
     }).join('');
-    return `<tr><td>${escapeHtmlSafe(g.date)}</td><td>${escapeHtmlSafe(g.site)}</td><td>${escapeHtmlSafe(g.company)}</td><td>${fmtMoney(g.rate_per_ton)}</td><td>${g.tons_per_load}</td><td>${fmtMoney(computedRowTotal(g))}</td>${driverCells}</tr>`;
+    return `<tr><td>${escapeHtmlSafe(g.date)}</td><td>${escapeHtmlSafe(g.site)}</td><td>${escapeHtmlSafe(g.company)}</td><td>${fmtMoney(g.rate_per_ton)}</td><td>${g.tons_per_load}</td><td>${fmtMoney(ratePerLoad)}</td><td>${fmtMoney(computedRowTotal(g))}</td>${driverCells}</tr>`;
   }).join('');
 
   const printWindow = window.open('', '_blank');
@@ -2965,7 +3033,7 @@ function exportPlanPDF(){
       <h1>Earth Angels Express — Dispatch Plan</h1>
       <h2>${startDate} to ${endDate} · generated ${new Date().toLocaleString()}</h2>
       <table>
-        <tr><th rowspan="2">Date</th><th rowspan="2">Site</th><th rowspan="2">Company</th><th rowspan="2">Rate/Ton</th><th rowspan="2">Tons/Load</th><th rowspan="2">Total</th>${driverHeaderRow}</tr>
+        <tr><th rowspan="2">Date</th><th rowspan="2">Site</th><th rowspan="2">Company</th><th rowspan="2">Rate/Ton</th><th rowspan="2">Tons/Load</th><th rowspan="2">Rate/Load</th><th rowspan="2">Total</th>${driverHeaderRow}</tr>
         <tr>${driverSubHeaderRow}</tr>
         ${rowsHtml}
       </table>

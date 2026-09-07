@@ -467,6 +467,7 @@ Friday 8/7/26'></textarea>
 
   <div id="multiLoadPanel" class="panel" style="display:none;">
     <label style="margin-bottom:10px;">Loads in this message — tap one to work on it</label>
+    <div id="multiLoadTotal" class="tonnage-hint" style="margin-bottom:10px;"></div>
     <div id="multiLoadChips" class="strategy-row" style="flex-wrap:wrap;"></div>
   </div>
 
@@ -1728,6 +1729,25 @@ function renderMultiLoadChips(){
     const saved = multiLoadSavedFlags[i] ? ' ✓' : '';
     return `<button class="strategy-btn ${i === activeMultiLoadIndex ? 'active' : ''}" onclick="loadMultiLoadItem(${i})">${escapeHtmlSafe(label)}${saved}</button>`;
   }).join('');
+
+  const totalEl = document.getElementById('multiLoadTotal');
+  if (totalEl) {
+    let grandTotal = 0;
+    let anyUnknown = false;
+    const byCompany = {};
+    multiLoadItems.forEach(f => {
+      const n = parseInt(f.quantity, 10);
+      if (isNaN(n)) { anyUnknown = true; return; }
+      grandTotal += n;
+      const key = f.company || 'Uncategorized';
+      byCompany[key] = (byCompany[key] || 0) + n;
+    });
+    const companyNames = Object.keys(byCompany);
+    const breakdown = companyNames.length > 1
+      ? ' (' + companyNames.map(c => `${c}: ${byCompany[c]}`).join(', ') + ')'
+      : '';
+    totalEl.textContent = `Total: ${grandTotal} load${grandTotal === 1 ? '' : 's'} across ${multiLoadItems.length} job${multiLoadItems.length === 1 ? '' : 's'}${breakdown}${anyUnknown ? ' — some jobs still need a quantity' : ''}`;
+  }
 }
 
 function loadMultiLoadItem(index){
@@ -1796,6 +1816,12 @@ function saveButtonHtml(fieldPrefix){
 function updateField(key, value){
   currentFields[key] = value;
   renderOutput();
+
+  // If this is a multi-load message and the quantity changed, refresh the
+  // chip labels and running total so they don't go stale.
+  if (key === 'quantity' && multiLoadItems.length > 0) {
+    renderMultiLoadChips();
+  }
 
   // Toggle the Save button for the relevant field WITHOUT rebuilding the
   // whole grid — a full re-render would tear down the input mid-typing and

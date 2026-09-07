@@ -388,6 +388,7 @@
             <option value="plant" selected>Plant</option>
             <option value="site">Site</option>
           </select>
+          <input class="search-input" type="number" step="0.01" style="margin-bottom:0;" id="newAddrRate" placeholder="$/ton (optional)">
         </div>
         <button class="btn-secondary" onclick="addNewCustomAddress()" id="newAddrSubmitBtn">+ Add to address book</button>
         <div id="newAddrStatus" class="tonnage-hint"></div>
@@ -626,7 +627,7 @@ function getUniqueLocations(){
     if (!seen.has(dKey)) seen.set(dKey, { name: row['Amrize RMX Plant Name'], address: row['Destination Address'], customer: defaultCustomerLabel, type: 'plant' });
   });
   customAddressCache.forEach(c => {
-    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, customer: c.customer || defaultCustomerLabel, type: c.location_type || 'site', custom: true });
+    seen.set(c.station_name + '|' + c.address, { name: c.station_name, address: c.address, customer: c.customer || defaultCustomerLabel, type: c.location_type || 'site', rate_per_ton: c.rate_per_ton, custom: true });
   });
   return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -638,11 +639,13 @@ async function addNewCustomAddress(){
   const valueInput = document.getElementById('newAddrValue');
   const customerSelect = document.getElementById('newAddrCustomer');
   const typeSelect = document.getElementById('newAddrType');
+  const rateInput = document.getElementById('newAddrRate');
   const statusEl = document.getElementById('newAddrStatus');
   const name = nameInput.value.trim();
   const value = valueInput.value.trim();
   const customer = customerSelect.value;
   const locationType = typeSelect.value;
+  const ratePerTon = rateInput.value === '' ? '' : parseFloat(rateInput.value);
 
   if (!name || !value) {
     statusEl.textContent = 'Enter both a name and an address (or coordinates).';
@@ -658,10 +661,10 @@ async function addNewCustomAddress(){
 
   statusEl.textContent = wasEditing ? 'Updating...' : 'Saving...';
   try {
-    await fetchBridge('saveCustomAddress', { stationName: name, address: value, customer, locationType });
+    await fetchBridge('saveCustomAddress', { stationName: name, address: value, customer, locationType, ratePerTon });
     const existing = customAddressCache.find(c => c.station_name.toLowerCase() === name.toLowerCase());
-    if (existing) { existing.address = value; existing.customer = customer; existing.location_type = locationType; }
-    else customAddressCache.push({ station_name: name, address: value, customer, location_type: locationType });
+    if (existing) { existing.address = value; existing.customer = customer; existing.location_type = locationType; existing.rate_per_ton = ratePerTon === '' ? null : ratePerTon; }
+    else customAddressCache.push({ station_name: name, address: value, customer, location_type: locationType, rate_per_ton: ratePerTon === '' ? null : ratePerTon });
 
     if (renamed) {
       await fetchBridge('deleteCustomAddress', { stationName: wasEditing });
@@ -681,7 +684,8 @@ async function addNewCustomAddress(){
 }
 
 // Populates the "Add a new location" form from an existing entry so it can
-// be edited (e.g. flipping Site <-> Plant) instead of retyping it.
+// be edited (e.g. flipping Site <-> Plant, or fixing its rate) instead of
+// retyping it.
 function editAddressEntry(index){
   const loc = addrBookListCache[index];
   if (!loc) return;
@@ -692,6 +696,7 @@ function editAddressEntry(index){
   populateCustomerDropdowns();
   document.getElementById('newAddrCustomer').value = loc.customer;
   document.getElementById('newAddrType').value = loc.type;
+  document.getElementById('newAddrRate').value = (loc.rate_per_ton === null || loc.rate_per_ton === undefined) ? '' : loc.rate_per_ton;
   document.getElementById('newAddrSubmitBtn').textContent = '✓ Update address';
   document.getElementById('cancelAddrEditBtn').style.display = 'block';
   document.getElementById('newAddrStatus').textContent = `Editing "${loc.name}" — change anything below, then tap Update address.`;
@@ -703,6 +708,7 @@ function cancelAddrEdit(){
   document.getElementById('newAddrName').value = '';
   document.getElementById('newAddrValue').value = '';
   document.getElementById('newAddrType').value = 'plant';
+  document.getElementById('newAddrRate').value = '';
   document.getElementById('newAddrSubmitBtn').textContent = '+ Add to address book';
   document.getElementById('cancelAddrEditBtn').style.display = 'none';
   document.getElementById('newAddrStatus').textContent = '';
@@ -770,7 +776,10 @@ async function handleAddrExcelUpload(event){
       const keys = Object.keys(r);
       const nameKey = keys.find(k => /^(name|location|station|site)/i.test(k.trim()));
       const addrKey = keys.find(k => /^(address|addr)/i.test(k.trim()));
-      return { name: excelCellToStr(nameKey ? r[nameKey] : ''), address: excelCellToStr(addrKey ? r[addrKey] : ''), include: true };
+      const rateKey = keys.find(k => /^(rate|price)/i.test(k.trim()));
+      const rateRaw = rateKey ? excelCellToStr(r[rateKey]).replace(/[$,\s]/g, '') : '';
+      const rate = rateRaw && !isNaN(parseFloat(rateRaw)) ? parseFloat(rateRaw) : '';
+      return { name: excelCellToStr(nameKey ? r[nameKey] : ''), address: excelCellToStr(addrKey ? r[addrKey] : ''), rate, include: true };
     }).filter(r => r.name || r.address);
 
     if (parsed.length === 0) {
@@ -818,13 +827,13 @@ async function handleAddrPhotoUpload(event){
 function splitNameAddress(line){
   const match = line.match(/\d{1,6}\s+\S/);
   if (match && match.index > 0) {
-    return { name: line.slice(0, match.index).trim().replace(/[,\-:]+$/, ''), address: line.slice(match.index).trim(), include: true };
+    return { name: line.slice(0, match.index).trim().replace(/[,\-:]+$/, ''), address: line.slice(match.index).trim(), rate: '', include: true };
   }
   const commaIdx = line.indexOf(',');
   if (commaIdx > 0) {
-    return { name: line.slice(0, commaIdx).trim(), address: line.slice(commaIdx + 1).trim(), include: true };
+    return { name: line.slice(0, commaIdx).trim(), address: line.slice(commaIdx + 1).trim(), rate: '', include: true };
   }
-  return { name: line, address: '', include: true };
+  return { name: line, address: '', rate: '', include: true };
 }
 
 function renderAddrImportPreview(){
@@ -834,13 +843,15 @@ function renderAddrImportPreview(){
   const rowsHtml = addressImportRows.map((r, i) => `
     <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
       <input type="checkbox" ${r.include ? 'checked' : ''} onchange="addressImportRows[${i}].include = this.checked">
-      <input class="search-input" style="margin-bottom:0;" value="${escapeHtmlSafe(r.name)}" onblur="addressImportRows[${i}].name = this.value" placeholder="Name">
-      <input class="search-input" style="margin-bottom:0;" value="${escapeHtmlSafe(r.address)}" onblur="addressImportRows[${i}].address = this.value" placeholder="Address">
+      <input class="search-input" style="margin-bottom:0; flex:2;" value="${escapeHtmlSafe(r.name)}" onblur="addressImportRows[${i}].name = this.value" placeholder="Name">
+      <input class="search-input" style="margin-bottom:0; flex:3;" value="${escapeHtmlSafe(r.address)}" onblur="addressImportRows[${i}].address = this.value" placeholder="Address">
+      <input class="search-input" type="number" step="0.01" style="margin-bottom:0; flex:1; min-width:70px;" value="${r.rate === '' ? '' : r.rate}" onblur="addressImportRows[${i}].rate = this.value === '' ? '' : parseFloat(this.value)" placeholder="$/ton">
     </div>
   `).join('');
 
+  const rateCount = addressImportRows.filter(r => r.rate !== '' && r.rate !== undefined && r.rate !== null).length;
   previewEl.innerHTML = `
-    <div class="tonnage-hint" style="margin-top:10px;">Review before importing — spreadsheet/photo reads aren't always perfect. Uncheck or fix any row, then import. They'll all be tagged with whichever company is picked above.</div>
+    <div class="tonnage-hint" style="margin-top:10px;">Review before importing — spreadsheet/photo reads aren't always perfect. Uncheck or fix any row, then import. They'll all be tagged with whichever company is picked above.${rateCount ? ` Found a rate for ${rateCount} row(s) — it'll prefill Rate/Ton when you pick that site in Dispatch Planning.` : ''}</div>
     ${rowsHtml}
     <button class="btn-secondary" onclick="confirmAddrImport()">+ Import ${addressImportRows.filter(r => r.include).length} addresses</button>
   `;
@@ -858,10 +869,11 @@ async function confirmAddrImport(){
   let success = 0, failed = 0;
   for (const r of toImport) {
     try {
-      await fetchBridge('saveCustomAddress', { stationName: r.name, address: r.address, customer, locationType });
+      const ratePerTon = (r.rate !== '' && r.rate !== undefined && r.rate !== null) ? r.rate : '';
+      await fetchBridge('saveCustomAddress', { stationName: r.name, address: r.address, customer, locationType, ratePerTon });
       const existing = customAddressCache.find(c => c.station_name.toLowerCase() === r.name.toLowerCase());
-      if (existing) { existing.address = r.address; existing.customer = customer; existing.location_type = locationType; }
-      else customAddressCache.push({ station_name: r.name, address: r.address, customer, location_type: locationType });
+      if (existing) { existing.address = r.address; existing.customer = customer; existing.location_type = locationType; existing.rate_per_ton = ratePerTon === '' ? null : ratePerTon; }
+      else customAddressCache.push({ station_name: r.name, address: r.address, customer, location_type: locationType, rate_per_ton: ratePerTon === '' ? null : ratePerTon });
       success++;
     } catch (e) { failed++; }
   }
@@ -2907,7 +2919,9 @@ function getSiteOptions(company){
   return customAddressCache
     .filter(c => (c.customer || defaultCustomerLabel) === company)
     .map(c => ({ key: 'LOC|||' + c.station_name, kind: 'location', name: c.station_name,
-      label: `${c.station_name} (${(c.location_type || 'site') === 'plant' ? 'Plant' : 'Site'})` }))
+      ratePerTon: (c.rate_per_ton !== null && c.rate_per_ton !== undefined) ? c.rate_per_ton : null,
+      label: `${c.station_name} (${(c.location_type || 'site') === 'plant' ? 'Plant' : 'Site'})` +
+        ((c.rate_per_ton !== null && c.rate_per_ton !== undefined) ? ` ($${Number(c.rate_per_ton).toFixed(2)}/ton)` : '') }))
     .sort((a,b) => a.label.localeCompare(b.label));
 }
 
@@ -2936,7 +2950,10 @@ async function handleSiteSelectChange(groupKey, selectEl){
     await syncGroupFields(groupKey, fields);
   } else if (val.startsWith('LOC|||')) {
     const name = val.slice('LOC|||'.length);
-    await syncGroupFields(groupKey, { site: name });
+    const match = customAddressCache.find(c => c.station_name === name);
+    const fields = { site: name };
+    if (match && match.rate_per_ton !== null && match.rate_per_ton !== undefined) fields.rate_per_ton = match.rate_per_ton;
+    await syncGroupFields(groupKey, fields);
   }
 }
 

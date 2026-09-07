@@ -2202,6 +2202,7 @@ function renderDriverMessages(){
     const qty = assignments[d.name];
     const lines = [];
     lines.push(`Driver ${d.name}`);
+    lines.push(`${d.name} — ${qty} load${qty === 1 ? '' : 's'} across 1 job`);
     lines.push('Please acknowledge with a thumbs up 👍');
     if(dateLine) lines.push(dateLine);
     lines.push('');
@@ -2285,7 +2286,9 @@ function renderCombinedDriverMessages(){
     const dateLine = [first.dayName, first.date].filter(Boolean).join(' ');
 
     const lines = [];
+    const totalQty = jobs.reduce((s, j) => s + j.qty, 0);
     lines.push(`Driver ${driverName}`);
+    lines.push(`${driverName} — ${totalQty} load${totalQty === 1 ? '' : 's'} across ${jobs.length} job${jobs.length === 1 ? '' : 's'}`);
     lines.push('Please acknowledge all dispatches with a thumbs up 👍');
     if (dateLine) lines.push(dateLine);
     jobs.forEach((job, i) => {
@@ -2302,7 +2305,6 @@ function renderCombinedDriverMessages(){
       else if (f.time) lines.push(`Site opens at ${f.time}`);
     });
 
-    const totalQty = jobs.reduce((s, j) => s + j.qty, 0);
     const msg = lines.join('\n');
     const msgId = 'combined_msg_' + driverName.replace(/[^a-z0-9]/gi, '_');
     const driverObj = driversCache.find(d => d.name === driverName);

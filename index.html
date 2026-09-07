@@ -1764,7 +1764,18 @@ function renderMultiLoadChips(){
     const breakdown = companyNames.length > 1
       ? ' (' + companyNames.map(c => `${c}: ${byCompany[c]}`).join(', ') + ')'
       : '';
-    totalEl.textContent = `Total: ${grandTotal} load${grandTotal === 1 ? '' : 's'} across ${multiLoadItems.length} job${multiLoadItems.length === 1 ? '' : 's'}${breakdown}${anyUnknown ? ' — some jobs still need a quantity' : ''}`;
+
+    // How much of that total has actually been assigned to a driver so far,
+    // across every job in this paste — not just whichever job is on screen.
+    let totalAssigned = 0;
+    const allAssignments = getAllJobAssignments();
+    Object.values(allAssignments).forEach(jobAssign => {
+      Object.values(jobAssign || {}).forEach(qty => { if (qty > 0) totalAssigned += qty; });
+    });
+    const remaining = grandTotal - totalAssigned;
+    const assignedNote = grandTotal > 0 ? ` — ${totalAssigned} assigned, ${remaining} remaining` : '';
+
+    totalEl.textContent = `Total: ${grandTotal} load${grandTotal === 1 ? '' : 's'} across ${multiLoadItems.length} job${multiLoadItems.length === 1 ? '' : 's'}${breakdown}${assignedNote}${anyUnknown ? ' — some jobs still need a quantity' : ''}`;
   }
 }
 
@@ -2116,14 +2127,30 @@ function toggleDriverOff(driverName){
 
 function setAssignment(driverName, value){
   const n = parseInt(value, 10);
+  let clamped = false;
   if(!value || isNaN(n) || n <= 0){
     delete assignments[driverName];
   } else {
-    assignments[driverName] = n;
+    // Cap at what's actually left for this job — don't let the drivers
+    // assigned to it add up to more than the job's own total quantity.
+    const target = parseInt(currentFields.quantity, 10) || 0;
+    let toAssign = n;
+    if (target > 0) {
+      const othersTotal = Object.entries(assignments).reduce((sum, [name, qty]) => name === driverName ? sum : sum + qty, 0);
+      const maxAllowed = Math.max(0, target - othersTotal);
+      if (n > maxAllowed) {
+        toAssign = maxAllowed;
+        clamped = true;
+        alert(`Only ${maxAllowed} load${maxAllowed === 1 ? '' : 's'} left to assign for this job — total is ${target}.`);
+      }
+    }
+    if (toAssign > 0) assignments[driverName] = toAssign;
+    else delete assignments[driverName];
+
     // Last-chance catch — if the material still isn't set (e.g. the
     // earlier prompt got cancelled), don't let a driver message go out
     // with a blank "Product -" line.
-    if (!currentFields.product) {
+    if (toAssign > 0 && !currentFields.product) {
       const desc = describeJobForPrompt(currentFields);
       const question = desc
         ? `What material are you hauling ${desc}? (needed before sending to a driver)`
@@ -2132,9 +2159,11 @@ function setAssignment(driverName, value){
       if (product && product.trim()) { currentFields.product = product.trim(); renderFields(); }
     }
   }
+  if (clamped) renderDriverAssignment(); // reflect the clamped value in the box itself
   updateTotals();
   renderDriverMessages();
   renderCombinedDriverMessages();
+  renderMultiLoadChips(); // keeps the running grand total (assigned/remaining) current
 }
 
 function updateTotals(){

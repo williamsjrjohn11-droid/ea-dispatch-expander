@@ -70,6 +70,7 @@
   .field-label{font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:.04em; font-weight:600; display:flex; justify-content:space-between; align-items:center;}
   .book-picker-icon{ cursor:pointer; font-size:18px; line-height:1; padding:8px; margin:-8px; display:inline-flex; align-items:center; justify-content:center; }
   .remove-driver-icon{ cursor:pointer; color:var(--text3); font-size:14px; padding:9px 6px; margin:-9px -6px -9px 3px; display:inline-flex; align-items:center; justify-content:center; }
+  .delete-site-link{ cursor:pointer; color:var(--text3); font-size:11px; display:block; margin-top:6px; padding:6px 0; }
   .badge{font-size:10px; padding:2px 6px; border-radius:100px; font-weight:700; letter-spacing:.03em;}
   .badge-book{background:var(--green-dim); color:var(--green);}
   .badge-text{background:var(--panel2); color:var(--text-dim); border:1px solid var(--border2);}
@@ -4028,7 +4029,7 @@ function renderPlanDashboard(startDate, endDate){
     const knownSites = getSiteOptions(g.company);
     const siteLabelFor = s => s.kind === 'pair' ? (s.station + ' to ' + s.plant) : s.name;
     const siteMatchesKnown = knownSites.some(s => siteLabelFor(s) === g.site);
-    return `<th colspan="2">
+    return `<th colspan="2" style="min-width:150px;">
       <select class="plan-cell-input" onchange="handleSiteSelectChange('${gk}', this)">
         ${!g.site ? '<option value="" selected>Select site...</option>' : ''}
         ${!siteMatchesKnown && g.site ? `<option value="" selected>${escapeHtmlSafe(g.site)}</option>` : ''}
@@ -4057,15 +4058,15 @@ function renderPlanDashboard(startDate, endDate){
     return `<th colspan="2">
       <input class="plan-cell-input" type="number" step="0.01" value="${ratePerLoad}" onblur="syncGroupBaseField('${gk}','rate_per_load', this.value)" title="Rate/Load">
       <div class="report-stat-label" style="white-space:normal;">based off: ${fmtMoney(basedOff)}</div>
-      <span class="remove-driver-icon" title="Delete this whole site column" onclick="deleteWholeRow('${gk}')">🗑️ Delete site</span>
+      <span class="delete-site-link" title="Delete this whole site column" onclick="deleteWholeRow('${gk}')">🗑️ Delete site</span>
     </th>`;
   }).join('');
 
   const targetHeaderRow = groups.map(g => {
     const gk = escapeHtmlSafe(g.key);
     return `<th colspan="2">
-      <input class="plan-cell-input" type="number" style="width:60px;" value="${g.target_quantity !== null && g.target_quantity !== undefined ? g.target_quantity : ''}" placeholder="Order size" onblur="syncGroupBaseField('${gk}','target_quantity', this.value)" title="Target quantity — the site's own order size, independent of what's dispatched">
-      <div class="report-stat-label" style="white-space:normal;">loads issued</div>
+      <input class="plan-cell-input" type="number" style="width:70px;" value="${g.target_quantity !== null && g.target_quantity !== undefined ? g.target_quantity : ''}" placeholder="Order" onblur="syncGroupBaseField('${gk}','target_quantity', this.value)" title="Target quantity — the site's own order size, independent of what's dispatched">
+      <div class="report-stat-label" style="white-space:normal;">order size</div>
     </th>`;
   }).join('');
 
@@ -4129,7 +4130,7 @@ function renderPlanDashboard(startDate, endDate){
         <tfoot><tr><td colspan="2">All drivers</td>${checkCells}<td>${fmtMoney(grandTotal)}</td><td></td></tr></tfoot>
       </table>
     </div>
-    <div class="empty-hint">Type directly into any cell — it saves when you tap away. Rate/Load is yours to set (a "based off" hint shows Tons/Load × Rate/Ton for reference). The bottom row totals what's actually been dispatched per site — it's not an independent order total, so it always matches what's typed above.</div>
+    <div class="empty-hint">Type directly into any cell — it saves when you tap away. Rate/Load is yours to set (a "based off" hint shows Tons/Load × Rate/Ton for reference). Set "Order size" on a site to check dispatched loads against it — green when it matches, amber when short, red when over. Leave it blank to skip the check.</div>
   `;
 }
 

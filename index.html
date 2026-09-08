@@ -4048,8 +4048,8 @@ function renderPlanDashboard(startDate, endDate){
 
   const rateHeaderRow = groups.map(g => {
     const gk = escapeHtmlSafe(g.key);
-    return `<th><input class="plan-cell-input" type="number" step="0.01" style="width:55px;" value="${g.rate_per_ton}" onblur="syncGroupBaseField('${gk}','rate_per_ton', this.value)" title="Rate/Ton"><div class="report-stat-label">rate/ton</div></th>` +
-           `<th><input class="plan-cell-input" type="number" step="0.01" style="width:55px;" value="${g.tons_per_load}" onblur="syncGroupBaseField('${gk}','tons_per_load', this.value)" title="Tons/Load"><div class="report-stat-label">tons/load</div></th>`;
+    return `<th><input class="plan-cell-input" type="number" step="0.01" style="width:55px;" value="${g.rate_per_ton}" onblur="syncGroupBaseField('${gk}','rate_per_ton', this.value)" title="Rate/Ton"><div class="report-stat-label">1. rate</div></th>` +
+           `<th><input class="plan-cell-input" type="number" step="0.01" style="width:55px;" value="${g.tons_per_load}" onblur="syncGroupBaseField('${gk}','tons_per_load', this.value)" title="Tons/Load"><div class="report-stat-label">2. tons</div></th>`;
   }).join('');
 
   const rateLoadHeaderRow = groups.map(g => {

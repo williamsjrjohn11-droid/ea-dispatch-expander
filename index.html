@@ -291,6 +291,7 @@
   .plan-daily-goal{ font-weight:700; }
   .plan-daily-goal.met{ color:var(--green); }
   .plan-daily-goal.short{ color:var(--amber); }
+  .plan-daily-goal.over{ color:var(--red); }
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -343,7 +344,7 @@
 
       <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
         <label style="margin-bottom:8px; display:block;">Add a driver to a row</label>
-        <div class="tonnage-hint">Type directly into the grid below. Tap "+ Add row" for a new entry, and use each row's "+ driver" cell to bring a driver into that row and type their loads.</div>
+        <div class="tonnage-hint">Drivers are the rows, sites/jobs are the columns. Tap "+ Add site" for a new job column, and "+ Add driver" (below the table) for a new driver row — then type dispatched loads directly into the grid.</div>
       </div>
 
       <div class="strategy-row" style="margin-bottom:14px;">
@@ -351,7 +352,7 @@
         <input type="date" class="search-input" id="planFilterEnd" onchange="loadDispatchPlanData()">
       </div>
       <div class="strategy-row" style="margin-bottom:14px;">
-        <button class="btn-secondary" style="flex:1; margin:0;" onclick="addDraftRow()">+ Add row</button>
+        <button class="btn-secondary" style="flex:1; margin:0;" onclick="addDraftRow()">+ Add site</button>
         <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportPlanExcel()">📊 Download Excel</button>
         <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportPlanPDF()">🖨️ Download PDF</button>
       </div>
@@ -3545,6 +3546,8 @@ async function loadDispatchPlanData(){
     // draft's first driver has actually been saved and assigned one.
     const realGroupIds = new Set(planCache.map(p => p.group_id).filter(Boolean));
     planDraftGroups = planDraftGroups.filter(g => !(g.group_id && realGroupIds.has(g.group_id)));
+    const realDriverDateKeys = new Set(planCache.map(p => p.driver + '|' + p.date));
+    pivotDraftDriverRows = pivotDraftDriverRows.filter(r => !realDriverDateKeys.has(r.key));
 
     renderPlanDashboard(startDate, endDate);
     renderPlanProjection();
@@ -3579,6 +3582,7 @@ function buildPlanGroups(startDate, endDate){
         key, group_id: p.group_id, date: p.date, site: p.site, company: p.company,
         rate_per_ton: p.rate_per_ton, tons_per_load: p.tons_per_load,
         rate_per_load: p.rate_per_load, weeks_fsc: p.weeks_fsc,
+        target_quantity: (p.target_quantity !== null && p.target_quantity !== undefined) ? p.target_quantity : null,
         drivers: {}
       };
       order.push(key);
@@ -3752,7 +3756,8 @@ async function pushGroupFields(group){
   await Promise.all(driverEntries.map(([driverName, d]) => {
     const payload = { date: group.date, site: group.site, company: group.company,
       rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
-      rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc, group_id: group.group_id || undefined };
+      rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc, group_id: group.group_id || undefined,
+      target_quantity: group.target_quantity !== null && group.target_quantity !== undefined ? group.target_quantity : undefined };
     return fetchBridge('updatePlannedLoad', { planId: d.plan_id, payload: JSON.stringify(payload) });
   }));
   await loadDispatchPlanData();
@@ -3799,7 +3804,8 @@ async function addDriverToGroup(groupKey, driverName){
   const payload = { date: group.date, driver: driverName, site: group.site, company: group.company,
     rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
     rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc,
-    loads_to_give: 0, group_id: group.group_id || undefined };
+    loads_to_give: 0, group_id: group.group_id || undefined,
+    target_quantity: group.target_quantity !== null && group.target_quantity !== undefined ? group.target_quantity : undefined };
   try {
     const result = await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
     if (!result || result.success === false) {
@@ -3840,7 +3846,8 @@ async function syncDriverAssigned(groupKey, driverName, rawValue){
   const payload = { date: group.date, driver: driverName, site: group.site, company: group.company,
     rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
     rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc,
-    loads_to_give: loadsToGive, group_id: group.group_id || undefined };
+    loads_to_give: loadsToGive, group_id: group.group_id || undefined,
+    target_quantity: group.target_quantity !== null && group.target_quantity !== undefined ? group.target_quantity : undefined };
 
   try {
     if (existing && existing.plan_id) {
@@ -3910,12 +3917,67 @@ function completionFor(driverName, date){
   return planCompletionCache[driverName + '|' + date] || { count: 0, dollars: 0, pending: false };
 }
 
+// Removes a driver's entire row for one date — every site assignment they
+// have on that day. A row with nothing saved yet (still a placeholder from
+// "+ Add driver") just gets cleared locally.
+async function deleteDriverDayRow(driverName, date){
+  const groups = buildPlanGroups(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
+  const planIds = [];
+  groups.forEach(g => {
+    if (g.date !== date) return;
+    const d = g.drivers[driverName];
+    if (d && d.plan_id) planIds.push(d.plan_id);
+  });
+
+  if (planIds.length === 0) {
+    pivotDraftDriverRows = pivotDraftDriverRows.filter(r => r.key !== (driverName + '|' + date));
+    renderPlanDashboard(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
+    return;
+  }
+
+  if (!confirm(`Remove ${driverName}'s entire ${date} row? This clears all ${planIds.length} of their assignments for that day.`)) return;
+  try {
+    await Promise.all(planIds.map(planId => fetchBridge('deletePlannedLoad', { planId })));
+    await loadDispatchPlanData();
+  } catch (err) {
+    alert('Could not delete — ' + err.message);
+  }
+}
+
+let pivotDraftDriverRows = []; // { key, driver, date } — driver rows added via "+ Add driver" with nothing typed in yet
+
+function buildDriverDayRows(groups){
+  const rowMap = {};
+  groups.forEach(g => {
+    Object.entries(g.drivers).forEach(([driverName]) => {
+      const key = driverName + '|' + g.date;
+      if (!rowMap[key]) rowMap[key] = { key, driver: driverName, date: g.date };
+    });
+  });
+  pivotDraftDriverRows.forEach(r => { if (!rowMap[r.key]) rowMap[r.key] = r; });
+  return Object.values(rowMap).sort((a, b) => a.date.localeCompare(b.date) || a.driver.localeCompare(b.driver));
+}
+
+// "+ Add driver" — adds an empty row for a driver on the current start-date
+// filter, ready to type dispatched loads into for any site column that
+// shares that same date.
+function addDriverDayRowFromSelect(selectEl){
+  const name = selectEl.value;
+  selectEl.value = '';
+  if (!name) return;
+  const date = document.getElementById('planFilterStart').value;
+  const key = name + '|' + date;
+  if (!pivotDraftDriverRows.some(r => r.key === key)) pivotDraftDriverRows.push({ key, driver: name, date });
+  renderPlanDashboard(date, document.getElementById('planFilterEnd').value);
+}
+
 function renderPlanDashboard(startDate, endDate){
   const bodyEl = document.getElementById('planDashboardBody');
-  const groups = buildPlanGroups(startDate, endDate);
-  const driverNames = driverNamesForGroups(groups);
+  const groups = buildPlanGroups(startDate, endDate); // one per site/company/date — now rendered as COLUMNS
+  const rows = buildDriverDayRows(groups); // one per driver/date — now rendered as ROWS
 
-  // Summary strip across the whole filtered range.
+  // Summary strip across the whole filtered range — same numbers as before,
+  // just no longer tied to how the table is laid out.
   let totalAssigned = 0, totalCompleted = 0, totalIssued = 0, totalCompletedDollars = 0;
   groups.forEach(g => {
     Object.entries(g.drivers).forEach(([name, d]) => {
@@ -3945,111 +4007,129 @@ function renderPlanDashboard(startDate, endDate){
     </div>
   `;
 
-  if (groups.length === 0) {
-    bodyEl.innerHTML = summaryHtml + '<div class="empty-hint">No planned loads in this range yet. Tap "+ Add row" above.</div>';
+  const addDriverSelectHtml = `<select id="pivotAddDriverSelect" class="plan-add-driver-select" onchange="addDriverDayRowFromSelect(this)" style="margin-bottom:12px;">
+    <option value="">+ Add driver (for ${startDate})</option>
+    ${driversCache.map(d => `<option value="${escapeHtmlSafe(d.name)}">${escapeHtmlSafe(d.name)}</option>`).join('')}
+  </select>`;
+
+  if (groups.length === 0 && rows.length === 0) {
+    bodyEl.innerHTML = summaryHtml + addDriverSelectHtml + '<div class="empty-hint">No planned loads in this range yet. Tap "+ Add site" above.</div>';
     return;
   }
 
-  const driverHeaderRow = driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('') + '<th></th><th></th>';
-  const driverSubHeaderRow = driverNames.map(() =>
-    '<th>Assigned</th><th>Completed</th><th>Issued $</th><th>Completed $</th>'
-  ).join('') + '<th>Add driver</th><th>Delete</th>';
-
   const knownCompanies = getKnownCompanies();
 
-  const bodyRows = groups.map(g => {
-    const ratePerLoad = computedRatePerLoad(g);
-    const rowTotal = computedRowTotal(g);
+  // ---- Column (site/job) headers — 4 rows: site+company, rate/ton+tons/load, rate/load+delete, sub-labels ----
+  const siteHeaderRow = groups.map(g => {
     const gk = escapeHtmlSafe(g.key);
-    const basedOff = (Number(g.tons_per_load) || 0) * (Number(g.rate_per_ton) || 0);
-
-    const driverCells = driverNames.map(name => {
-      const d = g.drivers[name];
-      if (!d) return '<td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td><td class="plan-empty">–</td>';
-      const c = completionFor(name, g.date);
-      const issued = (Number(d.loads_to_give) || 0) * ratePerLoad;
-      return `<td style="white-space:nowrap;"><input class="plan-cell-input" type="number" style="width:60px;" value="${d.loads_to_give}" onblur="syncDriverAssigned('${gk}','${escapeHtmlSafe(name).replace(/'/g,"\\'")}', this.value)">` +
-        `<span class="remove-driver-icon" title="Remove ${escapeHtmlSafe(name)} from this row" onclick="deletePlannedLoadUI('${d.plan_id}')">✕</span></td>` +
-        `<td class="plan-computed">${c.count}${c.pending ? '*' : ''}</td>` +
-        `<td class="plan-computed">${fmtMoney(issued)}</td>` +
-        `<td class="plan-computed">${fmtMoney(c.dollars)}</td>`;
-    }).join('');
-
-    const availableDrivers = driversCache.filter(d => !g.drivers[d.name]);
-    const addDriverCell = `<td><select class="plan-add-driver-select" onchange="addDriverToGroup('${gk}', this.value); this.value='';">
-      <option value="">+ driver</option>
-      ${availableDrivers.map(d => `<option value="${escapeHtmlSafe(d.name)}">${escapeHtmlSafe(d.name)}</option>`).join('')}
-    </select></td>`;
-
     const companyOptions = knownCompanies.map(c =>
       `<option value="${escapeHtmlSafe(c)}" ${c === g.company ? 'selected' : ''}>${escapeHtmlSafe(c)}</option>`
     ).join('');
-    const companyCell = `<td><select class="plan-cell-input" onchange="handleCompanySelectChange('${gk}', this)">
-      ${!g.company ? '<option value="" selected>Select...</option>' : ''}
-      ${companyOptions}
-      <option value="__new__">+ Add new company...</option>
-    </select></td>`;
-
     const knownSites = getSiteOptions(g.company);
     const siteLabelFor = s => s.kind === 'pair' ? (s.station + ' to ' + s.plant) : s.name;
     const siteMatchesKnown = knownSites.some(s => siteLabelFor(s) === g.site);
-    const siteCell = `<td class="plan-site-cell"><select class="plan-cell-input" onchange="handleSiteSelectChange('${gk}', this)">
-      ${!g.site ? '<option value="" selected>Select...</option>' : ''}
-      ${!siteMatchesKnown && g.site ? `<option value="" selected>${escapeHtmlSafe(g.site)}</option>` : ''}
-      ${knownSites.map(s => `<option value="${escapeHtmlSafe(s.key)}" ${siteLabelFor(s)===g.site ? 'selected' : ''}>${escapeHtmlSafe(s.label)}</option>`).join('')}
-      <option value="__custom__">+ Custom site...</option>
-    </select></td>`;
-
-    const deleteRowCell = `<td><span class="remove-driver-icon" title="Delete this whole entry" onclick="deleteWholeRow('${gk}')">🗑️</span></td>`;
-
-    return `<tr>
-      <td><input class="plan-cell-input" type="date" value="${g.date}" onblur="syncGroupBaseField('${gk}','date', this.value)"></td>
-      ${siteCell}
-      ${companyCell}
-      <td><input class="plan-cell-input" type="number" step="0.01" value="${g.rate_per_ton}" onblur="syncGroupBaseField('${gk}','rate_per_ton', this.value)"></td>
-      <td><input class="plan-cell-input" type="number" step="0.01" value="${g.tons_per_load}" onblur="syncGroupBaseField('${gk}','tons_per_load', this.value)"></td>
-      <td>
-        <input class="plan-cell-input" type="number" step="0.01" value="${ratePerLoad}" onblur="syncGroupBaseField('${gk}','rate_per_load', this.value)">
-        <div class="report-stat-label" style="white-space:normal;">based off: ${fmtMoney(basedOff)}</div>
-      </td>
-      <td class="plan-computed">${fmtMoney(rowTotal)}</td>
-      ${driverCells}
-      ${addDriverCell}
-      ${deleteRowCell}
-    </tr>`;
+    return `<th colspan="2">
+      <select class="plan-cell-input" onchange="handleSiteSelectChange('${gk}', this)">
+        ${!g.site ? '<option value="" selected>Select site...</option>' : ''}
+        ${!siteMatchesKnown && g.site ? `<option value="" selected>${escapeHtmlSafe(g.site)}</option>` : ''}
+        ${knownSites.map(s => `<option value="${escapeHtmlSafe(s.key)}" ${siteLabelFor(s)===g.site ? 'selected' : ''}>${escapeHtmlSafe(s.label)}</option>`).join('')}
+        <option value="__custom__">+ Custom site...</option>
+      </select>
+      <select class="plan-cell-input" onchange="handleCompanySelectChange('${gk}', this)">
+        ${!g.company ? '<option value="" selected>Select co...</option>' : ''}
+        ${companyOptions}
+        <option value="__new__">+ Add new company...</option>
+      </select>
+      <input class="plan-cell-input" type="date" value="${g.date}" onblur="syncGroupBaseField('${gk}','date', this.value)">
+    </th>`;
   }).join('');
 
-  const totalsRow = `<tr>
-    <td colspan="7">All entries</td>
-    ${driverNames.map(name => {
-      let a = 0, c = 0, i = 0, cd = 0;
-      groups.forEach(g => {
-        const d = g.drivers[name];
-        if (!d) return;
-        a += Number(d.loads_to_give) || 0;
-        i += (Number(d.loads_to_give) || 0) * computedRatePerLoad(g);
-        const comp = completionFor(name, g.date);
-        c += comp.count; cd += comp.dollars;
-      });
-      return `<td>${a}</td><td>${c}</td><td>${fmtMoney(i)}</td><td>${fmtMoney(cd)}</td>`;
-    }).join('')}
-    <td></td>
-    <td></td>
-  </tr>`;
+  const rateHeaderRow = groups.map(g => {
+    const gk = escapeHtmlSafe(g.key);
+    return `<th><input class="plan-cell-input" type="number" step="0.01" style="width:55px;" value="${g.rate_per_ton}" onblur="syncGroupBaseField('${gk}','rate_per_ton', this.value)" title="Rate/Ton"></th>` +
+           `<th><input class="plan-cell-input" type="number" step="0.01" style="width:55px;" value="${g.tons_per_load}" onblur="syncGroupBaseField('${gk}','tons_per_load', this.value)" title="Tons/Load"></th>`;
+  }).join('');
+
+  const rateLoadHeaderRow = groups.map(g => {
+    const gk = escapeHtmlSafe(g.key);
+    const ratePerLoad = computedRatePerLoad(g);
+    const basedOff = (Number(g.tons_per_load) || 0) * (Number(g.rate_per_ton) || 0);
+    return `<th colspan="2">
+      <input class="plan-cell-input" type="number" step="0.01" value="${ratePerLoad}" onblur="syncGroupBaseField('${gk}','rate_per_load', this.value)" title="Rate/Load">
+      <div class="report-stat-label" style="white-space:normal;">based off: ${fmtMoney(basedOff)}</div>
+      <span class="remove-driver-icon" title="Delete this whole site column" onclick="deleteWholeRow('${gk}')">🗑️ Delete site</span>
+    </th>`;
+  }).join('');
+
+  const targetHeaderRow = groups.map(g => {
+    const gk = escapeHtmlSafe(g.key);
+    return `<th colspan="2">
+      <input class="plan-cell-input" type="number" style="width:60px;" value="${g.target_quantity !== null && g.target_quantity !== undefined ? g.target_quantity : ''}" placeholder="Order size" onblur="syncGroupBaseField('${gk}','target_quantity', this.value)" title="Target quantity — the site's own order size, independent of what's dispatched">
+      <div class="report-stat-label" style="white-space:normal;">loads issued</div>
+    </th>`;
+  }).join('');
+
+  const subLabelRow = groups.map(() => '<th>Dispatched</th><th>Assigned $</th>').join('');
+
+  // ---- Data rows — one per driver/date ----
+  const bodyRows = rows.map(row => {
+    let rowTotal = 0;
+    const cells = groups.map(g => {
+      if (g.date !== row.date) return '<td class="plan-empty">–</td><td class="plan-empty">–</td>';
+      const gk = escapeHtmlSafe(g.key);
+      const d = g.drivers[row.driver];
+      const dispatched = d ? Number(d.loads_to_give) || 0 : '';
+      const ratePerLoad = computedRatePerLoad(g);
+      const assignedDollars = d ? dispatched * ratePerLoad : 0;
+      rowTotal += assignedDollars;
+      return `<td><input class="plan-cell-input" type="number" style="width:55px;" value="${dispatched}" onblur="syncDriverAssigned('${gk}','${escapeHtmlSafe(row.driver).replace(/'/g,"\\'")}', this.value)"></td>` +
+             `<td class="plan-computed">${fmtMoney(assignedDollars)}</td>`;
+    }).join('');
+    return `<tr><td>${escapeHtmlSafe(row.driver)}</td><td>${escapeHtmlSafe(row.date)}</td>${cells}<td class="plan-computed">${fmtMoney(rowTotal)}</td><td><span class="remove-driver-icon" title="Delete ${escapeHtmlSafe(row.driver)}'s whole row" onclick="deleteDriverDayRow('${escapeHtmlSafe(row.driver).replace(/'/g,"\\'")}','${row.date}')">🗑️</span></td></tr>`;
+  }).join('');
+
+  // ---- Bottom check row — dispatched vs. the site's own declared order
+  // size (target_quantity), when one's been set. Green if it matches, amber
+  // if under, red if over — a real independent check, not just an echo of
+  // what's been typed into the Dispatched cells.
+  const checkCells = groups.map(g => {
+    let dispatchedSum = 0, dollarSum = 0;
+    Object.values(g.drivers).forEach(d => {
+      dispatchedSum += Number(d.loads_to_give) || 0;
+      dollarSum += (Number(d.loads_to_give) || 0) * computedRatePerLoad(g);
+    });
+    const hasTarget = g.target_quantity !== null && g.target_quantity !== undefined && g.target_quantity !== '';
+    let dispatchedCell;
+    if (!hasTarget) {
+      dispatchedCell = `${dispatchedSum}`;
+    } else {
+      const target = Number(g.target_quantity);
+      const diff = dispatchedSum - target;
+      const cls = diff === 0 ? 'plan-daily-goal met' : (diff < 0 ? 'plan-daily-goal short' : 'plan-daily-goal over');
+      const note = diff === 0 ? '✓ matches' : (diff < 0 ? `${-diff} left` : `${diff} over`);
+      dispatchedCell = `<span class="${cls}">${dispatchedSum} of ${target}</span><br><span style="font-size:10px;">${note}</span>`;
+    }
+    return `<td>${dispatchedCell}</td><td>${fmtMoney(dollarSum)}</td>`;
+  }).join('');
+  const grandTotal = groups.reduce((sum, g) => sum + computedRowTotal(g), 0);
 
   bodyEl.innerHTML = `
     ${summaryHtml}
+    ${addDriverSelectHtml}
     <div class="plan-table-wrap">
       <table class="plan-table">
         <thead>
-          <tr><th colspan="7">Entry</th>${driverHeaderRow}</tr>
-          <tr><th>Date</th><th>Site</th><th>Company</th><th>Rate/Ton</th><th>Tons/Load</th><th>Rate/Load</th><th>Total</th>${driverSubHeaderRow}</tr>
+          <tr><th rowspan="5">Driver</th><th rowspan="5">Date</th>${siteHeaderRow}<th rowspan="5">Total $</th><th rowspan="5">Delete</th></tr>
+          <tr>${rateHeaderRow}</tr>
+          <tr>${rateLoadHeaderRow}</tr>
+          <tr>${targetHeaderRow}</tr>
+          <tr>${subLabelRow}</tr>
         </thead>
         <tbody>${bodyRows}</tbody>
-        <tfoot>${totalsRow}</tfoot>
+        <tfoot><tr><td colspan="2">All drivers</td>${checkCells}<td>${fmtMoney(grandTotal)}</td><td></td></tr></tfoot>
       </table>
     </div>
-    <div class="empty-hint">Type directly into any cell — it saves when you tap away. Rate/Load is yours to set (a "based off" hint shows Tons/Load × Rate/Ton for reference). Completed / Completed $ come from real Tickets data and can't be typed in. * = estimated, not yet settled.</div>
+    <div class="empty-hint">Type directly into any cell — it saves when you tap away. Rate/Load is yours to set (a "based off" hint shows Tons/Load × Rate/Ton for reference). The bottom row totals what's actually been dispatched per site — it's not an independent order total, so it always matches what's typed above.</div>
   `;
 }
 
@@ -4107,24 +4187,40 @@ function exportPlanExcel(){
   const startDate = document.getElementById('planFilterStart').value;
   const endDate = document.getElementById('planFilterEnd').value;
   const groups = buildPlanGroups(startDate, endDate);
-  const driverNames = driverNamesForGroups(groups);
+  const rows = buildDriverDayRows(groups);
 
-  const sheetData = groups.map(g => {
-    const ratePerLoad = computedRatePerLoad(g);
-    const row = {
-      'Date': g.date, 'Site': g.site, 'Company': g.company,
-      'Rate/Ton': g.rate_per_ton, 'Tons/Load': g.tons_per_load, 'Rate/Load': ratePerLoad, 'Total': computedRowTotal(g)
-    };
-    driverNames.forEach(name => {
-      const d = g.drivers[name];
-      const c = completionFor(name, g.date);
-      row[`${name} Assigned`] = d ? d.loads_to_give : '';
-      row[`${name} Completed`] = d ? c.count : '';
-      row[`${name} Issued $`] = d ? Math.round((d.loads_to_give * ratePerLoad) * 100) / 100 : '';
-      row[`${name} Completed $`] = d ? Math.round(c.dollars * 100) / 100 : '';
-    });
-    return row;
+  const siteLabel = g => `${g.site || 'Site'} (${g.company || 'no company'}, ${g.date})`;
+
+  // Two summary rows up top — the site's own declared order size, and what's
+  // actually been dispatched so far — before the per-driver breakdown.
+  const targetRow = { 'Driver': '', 'Date': 'TARGET QTY' };
+  const dispatchedTotalRow = { 'Driver': '', 'Date': 'DISPATCHED TOTAL' };
+  groups.forEach(g => {
+    targetRow[`${siteLabel(g)} Dispatched`] = (g.target_quantity !== null && g.target_quantity !== undefined) ? g.target_quantity : '';
+    targetRow[`${siteLabel(g)} Assigned $`] = '';
+    let dispatchedSum = 0;
+    Object.values(g.drivers).forEach(d => { dispatchedSum += Number(d.loads_to_give) || 0; });
+    dispatchedTotalRow[`${siteLabel(g)} Dispatched`] = dispatchedSum;
+    dispatchedTotalRow[`${siteLabel(g)} Assigned $`] = '';
   });
+  targetRow['Total $'] = '';
+  dispatchedTotalRow['Total $'] = '';
+
+  const sheetData = [targetRow, dispatchedTotalRow, ...rows.map(row => {
+    const out = { 'Driver': row.driver, 'Date': row.date };
+    let total = 0;
+    groups.forEach(g => {
+      if (g.date !== row.date) return;
+      const d = g.drivers[row.driver];
+      const dispatched = d ? Number(d.loads_to_give) || 0 : '';
+      const dollars = d ? dispatched * computedRatePerLoad(g) : '';
+      if (d) total += dollars;
+      out[`${siteLabel(g)} Dispatched`] = dispatched;
+      out[`${siteLabel(g)} Assigned $`] = dollars === '' ? '' : Math.round(dollars * 100) / 100;
+    });
+    out['Total $'] = Math.round(total * 100) / 100;
+    return out;
+  })];
 
   const ws = XLSX.utils.json_to_sheet(sheetData);
   const wb = XLSX.utils.book_new();
@@ -4136,22 +4232,34 @@ function exportPlanPDF(){
   const startDate = document.getElementById('planFilterStart').value;
   const endDate = document.getElementById('planFilterEnd').value;
   const groups = buildPlanGroups(startDate, endDate);
-  const driverNames = driverNamesForGroups(groups);
+  const rows = buildDriverDayRows(groups);
 
-  const driverHeaderRow = driverNames.map(name => `<th colspan="4">${escapeHtmlSafe(name)}</th>`).join('');
-  const driverSubHeaderRow = driverNames.map(() =>
-    '<th>Assigned</th><th>Completed</th><th>Issued $</th><th>Completed $</th>'
-  ).join('');
-  const rowsHtml = groups.map(g => {
-    const ratePerLoad = computedRatePerLoad(g);
-    const driverCells = driverNames.map(name => {
-      const d = g.drivers[name];
-      if (!d) return '<td>–</td><td>–</td><td>–</td><td>–</td>';
-      const c = completionFor(name, g.date);
-      const issued = d.loads_to_give * ratePerLoad;
-      return `<td>${d.loads_to_give}</td><td>${c.count}${c.pending ? '*' : ''}</td><td>${fmtMoney(issued)}</td><td>${fmtMoney(c.dollars)}</td>`;
+  const siteHeaderRow = groups.map(g => `<th colspan="2">${escapeHtmlSafe(g.site || 'Site')}<br><span style="font-weight:normal;">${escapeHtmlSafe(g.company || '')} · ${g.date} · $${Number(g.rate_per_ton).toFixed(2)}/ton</span></th>`).join('');
+  const subLabelRow = groups.map(() => '<th>Dispatched</th><th>Assigned $</th>').join('');
+
+  const targetCells = groups.map(g => {
+    const hasTarget = g.target_quantity !== null && g.target_quantity !== undefined && g.target_quantity !== '';
+    return `<td colspan="2">${hasTarget ? 'Target: ' + g.target_quantity : '–'}</td>`;
+  }).join('');
+  const checkCells = groups.map(g => {
+    let dispatchedSum = 0;
+    Object.values(g.drivers).forEach(d => { dispatchedSum += Number(d.loads_to_give) || 0; });
+    const hasTarget = g.target_quantity !== null && g.target_quantity !== undefined && g.target_quantity !== '';
+    const note = hasTarget ? (dispatchedSum === Number(g.target_quantity) ? '✓ matches' : (dispatchedSum < Number(g.target_quantity) ? `${Number(g.target_quantity)-dispatchedSum} left` : `${dispatchedSum-Number(g.target_quantity)} over`)) : '';
+    return `<td colspan="2">${dispatchedSum} dispatched${note ? ' — ' + note : ''}</td>`;
+  }).join('');
+
+  const rowsHtml = rows.map(row => {
+    let total = 0;
+    const cells = groups.map(g => {
+      if (g.date !== row.date) return '<td>–</td><td>–</td>';
+      const d = g.drivers[row.driver];
+      const dispatched = d ? Number(d.loads_to_give) || 0 : 0;
+      const dollars = d ? dispatched * computedRatePerLoad(g) : 0;
+      total += dollars;
+      return `<td>${d ? dispatched : '–'}</td><td>${d ? fmtMoney(dollars) : '–'}</td>`;
     }).join('');
-    return `<tr><td>${escapeHtmlSafe(g.date)}</td><td>${escapeHtmlSafe(g.site)}</td><td>${escapeHtmlSafe(g.company)}</td><td>${fmtMoney(g.rate_per_ton)}</td><td>${g.tons_per_load}</td><td>${fmtMoney(ratePerLoad)}</td><td>${fmtMoney(computedRowTotal(g))}</td>${driverCells}</tr>`;
+    return `<tr><td>${escapeHtmlSafe(row.driver)}</td><td>${escapeHtmlSafe(row.date)}</td>${cells}<td>${fmtMoney(total)}</td></tr>`;
   }).join('');
 
   const printWindow = window.open('', '_blank');
@@ -4167,7 +4275,7 @@ function exportPlanPDF(){
         h2{ font-size:13px; color:#555; font-weight:normal; margin-top:0; }
         table{ width:100%; border-collapse:collapse; margin-top:16px; font-size:11px; }
         th, td{ border:1px solid #ccc; padding:6px 8px; text-align:center; }
-        td:nth-child(2){ text-align:left; }
+        td:nth-child(1){ text-align:left; }
         th{ background:#f0f0f0; }
       </style>
     </head>
@@ -4175,11 +4283,12 @@ function exportPlanPDF(){
       <h1>Earth Angels Express — Dispatch Plan</h1>
       <h2>${startDate} to ${endDate} · generated ${new Date().toLocaleString()}</h2>
       <table>
-        <tr><th rowspan="2">Date</th><th rowspan="2">Site</th><th rowspan="2">Company</th><th rowspan="2">Rate/Ton</th><th rowspan="2">Tons/Load</th><th rowspan="2">Rate/Load</th><th rowspan="2">Total</th>${driverHeaderRow}</tr>
-        <tr>${driverSubHeaderRow}</tr>
+        <tr><th rowspan="2">Driver</th><th rowspan="2">Date</th>${siteHeaderRow}<th rowspan="2">Total $</th></tr>
+        <tr>${subLabelRow}</tr>
+        <tr><td colspan="2">Order size</td>${targetCells}<td></td></tr>
+        <tr><td colspan="2">Check</td>${checkCells}<td></td></tr>
         ${rowsHtml}
       </table>
-      <p style="font-size:11px; color:#555;">* Completed $ marked with an asterisk is estimated from rate × tons because the ticket hasn't been settled yet.</p>
     </body>
     </html>
   `);

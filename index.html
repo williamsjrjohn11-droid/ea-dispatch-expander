@@ -299,6 +299,20 @@
   .plan-daily-goal.met{ color:var(--green); }
   .plan-daily-goal.short{ color:var(--amber); }
   .plan-daily-goal.over{ color:var(--red); }
+
+  .qe-row{background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:10px; margin-bottom:10px;}
+  .qe-row.qe-blocked{border-color:var(--amber);}
+  .qe-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+  .qe-grid .search-input{margin-bottom:0;}
+  .qe-grid-3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:8px;}
+  .qe-label{font-size:11px; color:var(--text3); margin:8px 0 3px;}
+  .qe-flag{background:var(--amber-dim); border:1px solid var(--amber); color:var(--amber); border-radius:6px; padding:8px 10px; margin-top:8px; font-size:12px;}
+  .qe-flag ul{margin:4px 0 6px 18px; padding:0;}
+  .qe-flag li{margin-bottom:2px;}
+  .qe-confirm-row{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--amber); margin-top:2px; cursor:pointer;}
+  .qe-confirm-row input{width:auto; margin:0;}
+  .qe-row-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;}
+  .qe-row-num{font-size:11px; color:var(--text3); font-weight:600;}
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -321,6 +335,7 @@
     <button class="top-link-btn" onclick="openDriverReport()">📊 Driver report</button>
     <button class="top-link-btn" onclick="openHelp()">❓ How to use</button>
     <button class="top-link-btn" onclick="openDispatchPlan()">🗓️ Dispatch planning</button>
+    <button class="top-link-btn" onclick="openQuickEntry()">⚡ Quick entry</button>
   </div>
 
   <div class="modal-overlay" id="driverReportModal">
@@ -368,6 +383,24 @@
 
       <h3 style="margin-top:20px;">Next 7 days — projection</h3>
       <div id="planProjectionBody"><div class="plan-loading">Loading...</div></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="quickEntryModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Quick dispatch entry</h2>
+        <button class="modal-close" onclick="closeModal('quickEntryModal')">Close</button>
+      </div>
+      <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
+        <div class="tonnage-hint">One row per driver per site. Pick Driver, Customer, then Site — Rate/Ton fills in automatically (from today's Dispatch Planning if that site's already set up, or from the address book if it's brand new). Anything uncertain gets flagged in amber below the row before it pushes — nothing pushes silently.</div>
+      </div>
+      <div id="quickEntryRows"></div>
+      <div class="strategy-row" style="margin-bottom:0;">
+        <button class="btn-secondary" style="flex:1; margin:0;" onclick="addQuickEntryRow()">+ Add row</button>
+      </div>
+      <button class="btn-primary" style="width:100%; margin-top:14px;" onclick="pushQuickEntry()">Push to Dispatch Planning</button>
+      <div class="save-status" id="quickEntryStatus"></div>
     </div>
   </div>
 
@@ -3929,6 +3962,356 @@ function driverNamesForGroups(groups){
   const ordered = driversCache.map(d => d.name).filter(n => seen.has(n));
   seen.forEach(n => { if (!ordered.includes(n)) ordered.push(n); });
   return ordered;
+}
+
+// =====================================================================
+// Quick dispatch entry — a fast, one-row-per-driver-per-site form that
+// writes into the same DispatchPlan rows the main pivoted grid uses (via
+// savePlannedLoad/updatePlannedLoad), instead of a separate data path.
+// Rate/ton auto-fills from an already-set-up site that day if one exists,
+// otherwise from the address book/lane rates (same lookup the main grid's
+// site picker uses) — new sites default tons/load to 25, matching
+// addDraftRow's own default. Anything the app had to guess, or that the
+// user changed away from what was auto-filled, is flagged and must be
+// explicitly confirmed per row before ANY row in the batch can push —
+// deliberately all-or-nothing so a flagged row can't slip through
+// unnoticed while others go through.
+// =====================================================================
+let quickEntryRows = [];
+let quickEntryIdCounter = 0;
+let quickEntryDateCache = {}; // date -> plans array, cleared on push
+
+function blankQuickEntryRow(){
+  return {
+    id: 'qe' + (++quickEntryIdCounter),
+    driver: '', company: '', siteKey: '', siteLabel: '', customSiteName: '',
+    date: formatDateKey(new Date()),
+    loads: '',
+    ratePerTon: '', tonsPerLoad: '',
+    autoRate: null, autoTons: null, isNewSite: false,
+    existingGroupId: null, existingPlanId: null, existingLoads: 0,
+    flags: [], confirmed: false, lastFlagSig: ''
+  };
+}
+
+async function openQuickEntry(){
+  document.getElementById('quickEntryModal').classList.add('show');
+  document.getElementById('quickEntryStatus').className = 'save-status';
+  if (!driversCache.length) await refreshDrivers();
+  if (!customAddressCache.length) { try { await loadCustomAddresses(); } catch(e){} }
+  if (!customRatesCache.length) { try { await loadCustomRates(); } catch(e){} }
+  if (!quickEntryRows.length) quickEntryRows.push(blankQuickEntryRow());
+  renderQuickEntry();
+}
+
+function addQuickEntryRow(){
+  quickEntryRows.push(blankQuickEntryRow());
+  renderQuickEntry();
+}
+
+function removeQuickEntryRow(id){
+  quickEntryRows = quickEntryRows.filter(r => r.id !== id);
+  if (!quickEntryRows.length) quickEntryRows.push(blankQuickEntryRow());
+  renderQuickEntry();
+}
+
+function findQERow(id){
+  return quickEntryRows.find(r => r.id === id);
+}
+
+// Mirrors the label logic in handleSiteSelectChange so a Quick Entry row
+// lands on exactly the same "site" text a driver added through the main
+// grid would use — this is what lets the two paths match up as one group.
+function siteLabelForOption(opt){
+  if (!opt) return '';
+  if (opt.kind === 'pair') return `${opt.station} to ${opt.plant}`;
+  if (opt.kind === 'cpair') return `${opt.origin} to ${opt.destination}`;
+  if (opt.kind === 'location') return opt.name;
+  return '';
+}
+
+async function getPlansForDate(date){
+  if (!date) return [];
+  if (quickEntryDateCache[date]) return quickEntryDateCache[date];
+  try {
+    const data = await fetchBridge('getPlannedLoads', { startDate: date, endDate: date });
+    quickEntryDateCache[date] = data.plans || [];
+  } catch (err) {
+    quickEntryDateCache[date] = [];
+  }
+  return quickEntryDateCache[date];
+}
+
+// Re-checks a row's site against that date's real Dispatch Planning data
+// (does it already exist today, with what rate/tons, does this driver
+// already have loads on it) and against the address book if it doesn't.
+// Called any time driver/company/site/date changes.
+async function refreshQERowContext(id){
+  const row = findQERow(id);
+  if (!row) return;
+  if (!row.date || !row.company || (!row.siteKey && !row.customSiteName)) { renderQuickEntry(); return; }
+
+  row.siteLabel = row.siteKey === '__custom__' ? row.customSiteName : siteLabelForOption(qeOptionForKey(row));
+
+  const plans = await getPlansForDate(row.date);
+  const norm = s => (s || '').trim().toLowerCase();
+  const matchesInGroup = plans.filter(p => norm(p.company) === norm(row.company) && norm(p.site) === norm(row.siteLabel));
+
+  if (matchesInGroup.length) {
+    const first = matchesInGroup[0];
+    row.isNewSite = false;
+    row.autoRate = Number(first.rate_per_ton) || 0;
+    row.autoTons = Number(first.tons_per_load) || 0;
+    row.existingGroupId = first.group_id || null;
+    const mine = row.driver ? matchesInGroup.find(p => p.driver === row.driver) : null;
+    row.existingPlanId = mine ? mine.plan_id : null;
+    row.existingLoads = mine ? (Number(mine.loads_to_give) || 0) : 0;
+  } else {
+    row.isNewSite = true;
+    row.existingGroupId = null; row.existingPlanId = null; row.existingLoads = 0;
+    const opt = qeOptionForKey(row);
+    row.autoRate = (opt && opt.ratePerTon !== null && opt.ratePerTon !== undefined) ? Number(opt.ratePerTon) : null;
+    row.autoTons = 25; // same default addDraftRow uses for a brand-new site
+  }
+
+  // Only auto-fill the editable fields the first time we learn a value —
+  // never stomp on something the user already typed for this row.
+  if (row.ratePerTon === '' && row.autoRate !== null) row.ratePerTon = row.autoRate;
+  if (row.tonsPerLoad === '') row.tonsPerLoad = row.autoTons;
+
+  computeQEFlags(row);
+  renderQuickEntry();
+}
+
+function qeOptionForKey(row){
+  if (!row.company || !row.siteKey || row.siteKey === '__custom__') return null;
+  return getSiteOptions(row.company).find(o => o.key === row.siteKey) || null;
+}
+
+function computeQEFlags(row){
+  const flags = [];
+  if (row.isNewSite) {
+    if (row.autoRate === null || row.autoRate === undefined) {
+      flags.push('No saved rate found for this site — enter Rate/Ton by hand before pushing.');
+    }
+    flags.push(`New site for ${row.date || 'this date'} — will be created with Tons/Load ${fmtNum(row.tonsPerLoad)} (default 25 unless you changed it).`);
+  }
+  if (row.autoRate !== null && row.autoRate !== undefined && Number(row.ratePerTon) !== Number(row.autoRate)) {
+    flags.push(row.isNewSite
+      ? `Rate changed from the address book's pulled rate for this site: pulled $${fmtNum(row.autoRate)}/ton, entering $${fmtNum(row.ratePerTon)}/ton.`
+      : `Rate changed from what's already saved for this site today: was $${fmtNum(row.autoRate)}/ton, entering $${fmtNum(row.ratePerTon)}/ton.`);
+  }
+  if (!row.isNewSite && row.autoTons !== null && Number(row.tonsPerLoad) !== Number(row.autoTons)) {
+    flags.push(`Tons/load changed from what's already saved for this site today: was ${fmtNum(row.autoTons)}, entering ${fmtNum(row.tonsPerLoad)}.`);
+  }
+  if (row.existingPlanId && Number(row.existingLoads) !== (parseFloat(row.loads) || 0)) {
+    flags.push(`${row.driver} already has ${fmtNum(row.existingLoads)} loads on this site today — pushing will change it to ${fmtNum(row.loads) || 0}.`);
+  }
+  const sig = JSON.stringify(flags);
+  if (sig !== row.lastFlagSig) row.confirmed = false; // anything new to confirm resets the checkbox
+  row.flags = flags;
+  row.lastFlagSig = sig;
+}
+
+function fmtNum(n){
+  const v = Number(n);
+  if (Number.isNaN(v)) return n || '0';
+  return v % 1 === 0 ? String(v) : v.toFixed(2);
+}
+
+function handleQECompanyChange(id, val){
+  const row = findQERow(id); if (!row) return;
+  row.company = val; row.siteKey = ''; row.siteLabel = ''; row.customSiteName = '';
+  row.ratePerTon = ''; row.tonsPerLoad = ''; row.autoRate = null; row.autoTons = null;
+  row.flags = []; row.confirmed = false; row.lastFlagSig = '';
+  renderQuickEntry();
+}
+
+function handleQESiteChange(id, val){
+  const row = findQERow(id); if (!row) return;
+  if (val === '__custom__') {
+    const name = window.prompt('Site description:');
+    if (!name || !name.trim()) { renderQuickEntry(); return; }
+    row.siteKey = '__custom__'; row.customSiteName = name.trim();
+  } else {
+    row.siteKey = val; row.customSiteName = '';
+  }
+  row.ratePerTon = ''; row.tonsPerLoad = '';
+  refreshQERowContext(id);
+}
+
+function handleQEDriverChange(id, val){
+  const row = findQERow(id); if (!row) return;
+  row.driver = val;
+  refreshQERowContext(id);
+}
+
+function handleQEDateChange(id, val){
+  const row = findQERow(id); if (!row) return;
+  row.date = val;
+  refreshQERowContext(id);
+}
+
+function handleQELoadsChange(id, val){
+  const row = findQERow(id); if (!row) return;
+  row.loads = val;
+  computeQEFlags(row);
+  renderQuickEntry();
+}
+
+function handleQERateChange(id, val){
+  const row = findQERow(id); if (!row) return;
+  row.ratePerTon = parseFloat(val) || 0;
+  computeQEFlags(row);
+  renderQuickEntry();
+}
+
+function handleQETonsChange(id, val){
+  const row = findQERow(id); if (!row) return;
+  row.tonsPerLoad = parseFloat(val) || 0;
+  computeQEFlags(row);
+  renderQuickEntry();
+}
+
+function toggleQEConfirm(id, checked){
+  const row = findQERow(id); if (!row) return;
+  row.confirmed = checked;
+}
+
+function renderQuickEntry(){
+  const container = document.getElementById('quickEntryRows');
+  if (!container) return;
+  const companies = getKnownCompanies();
+  const driverNames = driversCache.map(d => d.name);
+
+  container.innerHTML = quickEntryRows.map((row, idx) => {
+    const siteOptions = row.company ? getSiteOptions(row.company) : [];
+    const siteOptionsHtml = siteOptions.map(o =>
+      `<option value="${escapeHtmlSafe(o.key)}" ${row.siteKey === o.key ? 'selected' : ''}>${escapeHtmlSafe(o.label)}</option>`).join('');
+    const customSelected = row.siteKey === '__custom__';
+
+    const blocked = row.flags.length > 0 && !row.confirmed;
+    const flagsHtml = row.flags.length ? `
+      <div class="qe-flag">
+        <b>Check before pushing:</b>
+        <ul>${row.flags.map(f => `<li>${escapeHtmlSafe(f)}</li>`).join('')}</ul>
+        <label class="qe-confirm-row">
+          <input type="checkbox" ${row.confirmed ? 'checked' : ''} onchange="toggleQEConfirm('${row.id}', this.checked)">
+          This is correct — include this row when I push
+        </label>
+      </div>` : '';
+
+    return `
+      <div class="qe-row ${blocked ? 'qe-blocked' : ''}">
+        <div class="qe-row-top">
+          <span class="qe-row-num">Row ${idx + 1}</span>
+          <span class="delete-site-link" title="Remove this row" onclick="removeQuickEntryRow('${row.id}')">🗑️</span>
+        </div>
+        <div class="qe-grid">
+          <select class="search-input" onchange="handleQEDriverChange('${row.id}', this.value)">
+            <option value="">Driver...</option>
+            ${driverNames.map(n => `<option value="${escapeHtmlSafe(n)}" ${row.driver === n ? 'selected' : ''}>${escapeHtmlSafe(n)}</option>`).join('')}
+          </select>
+          <select class="search-input" onchange="handleQECompanyChange('${row.id}', this.value)">
+            <option value="">Customer...</option>
+            ${companies.map(c => `<option value="${escapeHtmlSafe(c)}" ${row.company === c ? 'selected' : ''}>${escapeHtmlSafe(c)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="qe-grid" style="margin-top:8px;">
+          <select class="search-input" onchange="handleQESiteChange('${row.id}', this.value)" ${!row.company ? 'disabled' : ''}>
+            <option value="">${row.company ? 'Site...' : 'Pick a customer first'}</option>
+            ${siteOptionsHtml}
+            <option value="__custom__" ${customSelected ? 'selected' : ''}>+ Custom site...</option>
+          </select>
+          <input type="date" class="search-input" value="${row.date}" onchange="handleQEDateChange('${row.id}', this.value)">
+        </div>
+        <div class="qe-grid-3">
+          <div>
+            <div class="qe-label">Loads dispatched</div>
+            <input type="number" min="0" step="1" class="search-input" value="${row.loads}" placeholder="0" oninput="handleQELoadsChange('${row.id}', this.value)">
+          </div>
+          <div>
+            <div class="qe-label">Rate/Ton</div>
+            <input type="number" min="0" step="0.01" class="search-input" value="${row.ratePerTon}" oninput="handleQERateChange('${row.id}', this.value)">
+          </div>
+          <div>
+            <div class="qe-label">Tons/Load</div>
+            <input type="number" min="0" step="0.1" class="search-input" value="${row.tonsPerLoad}" oninput="handleQETonsChange('${row.id}', this.value)">
+          </div>
+        </div>
+        ${flagsHtml}
+      </div>`;
+  }).join('');
+}
+
+async function pushQuickEntry(){
+  const statusEl = document.getElementById('quickEntryStatus');
+  const ready = quickEntryRows.filter(r => r.driver && r.company && (r.siteKey || r.customSiteName) && r.date && (parseFloat(r.loads) || 0) > 0);
+
+  if (!ready.length) {
+    statusEl.className = 'save-status show err';
+    statusEl.textContent = 'Fill in at least one complete row (driver, customer, site, date, and loads) before pushing.';
+    return;
+  }
+
+  const unconfirmed = ready.filter(r => r.flags.length > 0 && !r.confirmed);
+  if (unconfirmed.length) {
+    statusEl.className = 'save-status show err';
+    statusEl.textContent = `${unconfirmed.length} row${unconfirmed.length === 1 ? '' : 's'} still need${unconfirmed.length === 1 ? 's' : ''} the amber checkbox confirmed before anything can push — nothing has been sent yet.`;
+    renderQuickEntry();
+    return;
+  }
+  const missingRate = ready.filter(r => r.ratePerTon === '' || r.ratePerTon === null || Number.isNaN(Number(r.ratePerTon)));
+  if (missingRate.length) {
+    statusEl.className = 'save-status show err';
+    statusEl.textContent = 'Every row needs a Rate/Ton before pushing — fill in the missing one(s) above.';
+    return;
+  }
+
+  statusEl.className = 'save-status show';
+  statusEl.textContent = 'Pushing...';
+
+  const newGroupIds = {}; // date|site|company -> group_id minted during this batch
+  let failed = [];
+
+  for (const row of ready) {
+    const groupKey = `${row.date}|||${row.siteLabel}|||${row.company}`;
+    const groupId = row.existingGroupId || newGroupIds[groupKey] || undefined;
+    const ratePerTon = Number(row.ratePerTon) || 0;
+    const tonsPerLoad = Number(row.tonsPerLoad) || 0;
+    const payload = {
+      date: row.date, driver: row.driver, site: row.siteLabel, company: row.company,
+      rate_per_ton: ratePerTon, tons_per_load: tonsPerLoad,
+      rate_per_load: ratePerTon * tonsPerLoad,
+      loads_to_give: parseFloat(row.loads) || 0,
+      group_id: groupId
+    };
+    try {
+      if (row.existingPlanId) {
+        await fetchBridge('updatePlannedLoad', { planId: row.existingPlanId, payload: JSON.stringify(payload) });
+      } else {
+        const result = await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
+        if (!groupId && result && result.group_id) newGroupIds[groupKey] = result.group_id;
+      }
+    } catch (err) {
+      failed.push(`${row.driver} — ${row.siteLabel || 'site'}: ${err.message}`);
+    }
+  }
+
+  quickEntryDateCache = {}; // stale now that we've written new rows
+
+  if (failed.length) {
+    statusEl.className = 'save-status show err';
+    statusEl.textContent = `Pushed ${ready.length - failed.length} of ${ready.length} rows. Failed: ${failed.join('; ')}`;
+  } else {
+    statusEl.className = 'save-status show ok';
+    statusEl.textContent = `✓ Pushed ${ready.length} row${ready.length === 1 ? '' : 's'} to Dispatch Planning.`;
+    quickEntryRows = [blankQuickEntryRow()];
+    renderQuickEntry();
+  }
+
+  await loadDispatchPlanData();
+  setTimeout(() => { closeModal('quickEntryModal'); openDispatchPlan(); }, 900);
 }
 
 function completionFor(driverName, date){

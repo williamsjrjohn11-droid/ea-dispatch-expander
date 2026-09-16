@@ -309,7 +309,7 @@
   .qe-flag{background:var(--amber-dim); border:1px solid var(--amber); color:var(--amber); border-radius:6px; padding:8px 10px; margin-top:8px; font-size:12px;}
   .qe-flag ul{margin:4px 0 6px 18px; padding:0;}
   .qe-flag li{margin-bottom:2px;}
-  .qe-confirm-row{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--amber); margin-top:2px; cursor:pointer;}
+  .qe-confirm-row{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--amber); margin-top:2px; cursor:pointer; text-transform:none; font-weight:600; letter-spacing:normal;}
   .qe-confirm-row input{width:auto; margin:0;}
   .qe-row-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;}
   .qe-row-num{font-size:11px; color:var(--text3); font-weight:600;}
@@ -377,6 +377,9 @@
         <button class="btn-secondary" style="flex:1; margin:0;" onclick="addDraftRow()">+ Add site</button>
         <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportPlanExcel()">📊 Download Excel</button>
         <button class="btn-secondary" style="flex:1; margin:0;" onclick="exportPlanPDF()">🖨️ Download PDF</button>
+      </div>
+      <div class="strategy-row" style="margin-bottom:14px;">
+        <button class="btn-secondary" style="flex:1; margin:0; color:var(--amber);" onclick="pushDayToExpander()">📤 Push a whole day to Expander</button>
       </div>
 
       <div id="planDashboardBody"><div class="plan-loading">Loading...</div></div>
@@ -3634,6 +3637,7 @@ function buildPlanGroups(startDate, endDate){
         rate_per_ton: p.rate_per_ton, tons_per_load: p.tons_per_load,
         rate_per_load: p.rate_per_load, weeks_fsc: p.weeks_fsc,
         target_quantity: (p.target_quantity !== null && p.target_quantity !== undefined) ? p.target_quantity : null,
+        product: p.product || '', time: p.site_time || '',
         drivers: {}
       };
       order.push(key);
@@ -3653,7 +3657,8 @@ function addDraftRow(){
   const key = 'draft_' + Date.now();
   planDraftGroups.push({
     key, group_id: null, date: formatDateKey(new Date()), site: '', company: '',
-    rate_per_ton: 0, tons_per_load: 25, rate_per_load: 0, weeks_fsc: 0, drivers: {}
+    rate_per_ton: 0, tons_per_load: 25, rate_per_load: 0, weeks_fsc: 0,
+    product: '', time: '', drivers: {}
   });
   const startDate = document.getElementById('planFilterStart').value;
   const endDate = document.getElementById('planFilterEnd').value;
@@ -3808,7 +3813,8 @@ async function pushGroupFields(group){
     const payload = { date: group.date, site: group.site, company: group.company,
       rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
       rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc, group_id: group.group_id || undefined,
-      target_quantity: group.target_quantity !== null && group.target_quantity !== undefined ? group.target_quantity : undefined };
+      target_quantity: group.target_quantity !== null && group.target_quantity !== undefined ? group.target_quantity : undefined,
+      product: group.product || '', site_time: group.time || '' };
     return fetchBridge('updatePlannedLoad', { planId: d.plan_id, payload: JSON.stringify(payload) });
   }));
   await loadDispatchPlanData();
@@ -3856,7 +3862,8 @@ async function addDriverToGroup(groupKey, driverName){
     rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
     rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc,
     loads_to_give: 0, group_id: group.group_id || undefined,
-    target_quantity: group.target_quantity !== null && group.target_quantity !== undefined ? group.target_quantity : undefined };
+    target_quantity: group.target_quantity !== null && group.target_quantity !== undefined ? group.target_quantity : undefined,
+    product: group.product || '', site_time: group.time || '' };
   try {
     const result = await fetchBridge('savePlannedLoad', { payload: JSON.stringify(payload) });
     if (!result || result.success === false) {
@@ -3898,7 +3905,8 @@ async function syncDriverAssigned(groupKey, driverName, rawValue){
     rate_per_ton: group.rate_per_ton, tons_per_load: group.tons_per_load,
     rate_per_load: group.rate_per_load, weeks_fsc: group.weeks_fsc,
     loads_to_give: loadsToGive, group_id: group.group_id || undefined,
-    target_quantity: group.target_quantity !== null && group.target_quantity !== undefined ? group.target_quantity : undefined };
+    target_quantity: group.target_quantity !== null && group.target_quantity !== undefined ? group.target_quantity : undefined,
+    product: group.product || '', site_time: group.time || '' };
 
   try {
     if (existing && existing.plan_id) {
@@ -4372,6 +4380,162 @@ function addDriverDayRowFromSelect(selectEl){
   renderPlanDashboard(date, document.getElementById('planFilterEnd').value);
 }
 
+// =====================================================================
+// Push to Dispatch Expander — takes one or more Dispatch Planning site
+// columns (already-assigned driver loads) and feeds them straight into the
+// same message-building pipeline a pasted dispatch uses (currentFields /
+// multiLoadItems / assignments / jobAssignments), so driver messages come
+// out the other end without retyping anything. Reuses runParse's own
+// single-job vs multi-job split: one pushed site behaves exactly like a
+// one-job paste, several behave like a multi-load paste with combined
+// per-driver messages.
+// =====================================================================
+
+// A planning "site" string only records the final label (e.g. "AMBROSE
+// SAND & GRAVEL to MCKINNEY READY MIX PLANT" or a single saved location
+// name) — not the separate pickup/delivery pieces a driver message needs.
+// This recovers those pieces by matching the label back against the same
+// site options the planning grid's own picker offers, then resolves real
+// addresses via matchLocation() (which already searches both the built-in
+// Amrize book and every saved custom address). Falls back to splitting on
+// " to " for anything that doesn't match a known option (e.g. a fully
+// custom typed site name).
+function resolveSiteAddressesForGroup(group){
+  const opt = (group.company ? getSiteOptions(group.company) : []).find(o => siteLabelForOption(o) === group.site);
+  if (opt) {
+    if (opt.kind === 'pair') {
+      const p = matchLocation(opt.station), d = matchLocation(opt.plant);
+      return { pickupStation: opt.station, pickupAddress: p.matched ? p.address : '',
+        deliveryStation: opt.plant, deliveryAddress: d.matched ? d.address : '' };
+    }
+    if (opt.kind === 'cpair') {
+      const p = matchLocation(opt.origin), d = matchLocation(opt.destination);
+      return { pickupStation: opt.origin, pickupAddress: p.matched ? p.address : '',
+        deliveryStation: opt.destination, deliveryAddress: d.matched ? d.address : '' };
+    }
+    if (opt.kind === 'location') {
+      // A single saved address with no pickup half — treated as the
+      // delivery/job-site end, matching how these get added (a customer's
+      // own site) rather than a quarry/plant pickup.
+      const m = matchLocation(opt.name);
+      return { pickupStation: '', pickupAddress: '', deliveryStation: opt.name, deliveryAddress: m.matched ? m.address : '' };
+    }
+  }
+  const label = group.site || '';
+  const splitMatch = label.match(/^(.*?)\s+to\s+(.*)$/i);
+  if (splitMatch) {
+    const p = matchLocation(splitMatch[1]), d = matchLocation(splitMatch[2]);
+    return { pickupStation: splitMatch[1].trim(), pickupAddress: p.matched ? p.address : '',
+      deliveryStation: splitMatch[2].trim(), deliveryAddress: d.matched ? d.address : '' };
+  }
+  const m = matchLocation(label);
+  return { pickupStation: '', pickupAddress: '', deliveryStation: label, deliveryAddress: m.matched ? m.address : '' };
+}
+
+// Builds one job-fields object in exactly the shape resolveFields() produces
+// for a pasted dispatch, so it can be dropped straight into currentFields/
+// multiLoadItems without the rest of the message pipeline knowing the
+// difference. detailsChecked is always true here — Planning has its own
+// Product/Time fields precisely so pushing doesn't need to interrupt with
+// the "what material are you hauling" prompt.
+function buildExpanderJobFromGroup(group){
+  const totalLoads = Object.values(group.drivers).reduce((s, d) => s + (Number(d.loads_to_give) || 0), 0);
+  const hasTarget = group.target_quantity !== null && group.target_quantity !== undefined && group.target_quantity !== '';
+  const quantity = String(hasTarget ? group.target_quantity : totalLoads);
+  const addr = resolveSiteAddressesForGroup(group);
+  const dayName = group.date ? new Date(group.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long' }) : '';
+
+  return {
+    quantity, product: group.product || '', dayName, date: group.date || '',
+    time: group.time || '', company: group.company || '',
+    pickupMapsLink: null, deliveryMapsLink: null, notes: '',
+    pickupStation: addr.pickupStation, pickupAddress: addr.pickupAddress,
+    pickupSource: addr.pickupAddress ? 'book' : 'none', pickupConfidence: addr.pickupAddress ? 1 : 0,
+    deliveryStation: addr.deliveryStation, deliveryAddress: addr.deliveryAddress,
+    deliverySource: addr.deliveryAddress ? 'book' : 'none', deliveryConfidence: addr.deliveryAddress ? 1 : 0,
+    detailsChecked: true
+  };
+}
+
+function buildAssignmentsForGroup(group){
+  const out = {};
+  Object.entries(group.drivers).forEach(([name, d]) => {
+    const qty = Number(d.loads_to_give) || 0;
+    if (qty > 0) out[name] = qty;
+  });
+  return out;
+}
+
+// Single entry point for both the per-column "📤 Push to Expander" button
+// and the "📤 Push a whole day" button — decides single-job vs multi-job
+// presentation the same way runParse() already does for a pasted dispatch.
+function pushGroupsToExpander(groupsToPush){
+  const usable = groupsToPush.filter(g => Object.values(g.drivers).some(d => (Number(d.loads_to_give) || 0) > 0));
+  if (!usable.length) {
+    alert('None of the selected site(s) have any loads dispatched to a driver yet — nothing to push.');
+    return;
+  }
+
+  const missingProduct = usable.filter(g => !g.product);
+  if (missingProduct.length) {
+    const names = missingProduct.map(g => g.site || 'unnamed site').join(', ');
+    if (!confirm(`No Product set for: ${names}. Push anyway? (You can still fill it in on the message screen before sending.)`)) return;
+  }
+
+  const jobs = usable.map(buildExpanderJobFromGroup);
+
+  closeModal('dispatchPlanModal');
+
+  if (jobs.length === 1) {
+    currentFields = jobs[0];
+    resetToSingleJobSession(); // hides multiLoadPanel, clears jobAssignments/assignments
+    assignments = buildAssignmentsForGroup(usable[0]);
+    renderFields();
+    renderOutput();
+  } else {
+    multiLoadItems = jobs;
+    activeMultiLoadIndex = 0;
+    Object.keys(multiLoadSavedFlags).forEach(k => delete multiLoadSavedFlags[k]);
+    jobAssignments = {};
+    usable.forEach((g, i) => { jobAssignments['multi_' + i] = buildAssignmentsForGroup(g); });
+    // loadMultiLoadItem(0) below immediately does jobAssignments['multi_0'] =
+    // assignments (saving "whatever job we're leaving") before reading it
+    // back out — so assignments must already equal multi_0's real value here,
+    // or that first line clobbers the pre-built assignments we just set above.
+    assignments = jobAssignments['multi_0'] || {};
+    document.getElementById('multiLoadPanel').style.display = 'block';
+    renderMultiLoadChips();
+    loadMultiLoadItem(0); // re-reads jobAssignments['multi_0'] into assignments, then renders everything
+  }
+
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function pushGroupToExpander(groupKey){
+  const group = findGroup(groupKey);
+  if (!group) return;
+  pushGroupsToExpander([group]);
+}
+
+function pushDayToExpander(){
+  const startDate = document.getElementById('planFilterStart').value;
+  const endDate = document.getElementById('planFilterEnd').value;
+  const groups = buildPlanGroups(startDate, endDate);
+  const dates = Array.from(new Set(groups.map(g => g.date).filter(Boolean))).sort();
+  if (!dates.length) { alert('No planned sites in the current date range to push.'); return; }
+
+  let targetDate = dates[0];
+  if (dates.length > 1) {
+    const input = window.prompt(`Which date should be pushed? Dates with planned sites in this range: ${dates.join(', ')}`, dates[0]);
+    if (!input) return;
+    targetDate = input.trim();
+  }
+
+  const dayGroups = groups.filter(g => g.date === targetDate);
+  if (!dayGroups.length) { alert('No planned sites found for ' + targetDate + '.'); return; }
+  pushGroupsToExpander(dayGroups);
+}
+
 function renderPlanDashboard(startDate, endDate){
   const bodyEl = document.getElementById('planDashboardBody');
   const groups = buildPlanGroups(startDate, endDate); // one per site/company/date — now rendered as COLUMNS
@@ -4459,6 +4623,16 @@ function renderPlanDashboard(startDate, endDate){
       <input class="plan-cell-input" type="number" step="0.01" value="${ratePerLoad}" onblur="syncGroupBaseField('${gk}','rate_per_load', this.value)" title="Rate/Load">
       <div class="report-stat-label" style="white-space:normal;">based off: ${fmtMoney(basedOff)}</div>
       <span class="delete-site-link" title="Delete this whole site column" onclick="deleteWholeRow('${gk}')">🗑️ Delete site</span>
+      <span class="delete-site-link" style="color:var(--amber);" title="Push this site's driver assignments to the Dispatch Expander for messaging" onclick="pushGroupToExpander('${gk}')">📤 Push to Expander</span>
+    </th>`;
+  }).join('');
+
+  const productTimeHeaderRow = groups.map(g => {
+    const gk = escapeHtmlSafe(g.key);
+    return `<th colspan="2">
+      <input class="plan-cell-input" type="text" value="${escapeHtmlSafe(g.product || '')}" placeholder="Product" onblur="syncGroupBaseField('${gk}','product', this.value)" title="Product/material">
+      <input class="plan-cell-input" type="text" value="${escapeHtmlSafe(g.time || '')}" placeholder="Time e.g. 5:30am" onblur="syncGroupBaseField('${gk}','time', this.value)" title="Site opens time" style="margin-top:4px;">
+      <div class="report-stat-label" style="white-space:normal;">product / time</div>
     </th>`;
   }).join('');
 
@@ -4520,9 +4694,10 @@ function renderPlanDashboard(startDate, endDate){
     <div class="plan-table-wrap">
       <table class="plan-table">
         <thead>
-          <tr><th rowspan="5">Driver</th><th rowspan="5">Date</th>${siteHeaderRow}<th rowspan="5">Total $</th><th rowspan="5">Delete</th></tr>
+          <tr><th rowspan="6">Driver</th><th rowspan="6">Date</th>${siteHeaderRow}<th rowspan="6">Total $</th><th rowspan="6">Delete</th></tr>
           <tr>${rateHeaderRow}</tr>
           <tr>${rateLoadHeaderRow}</tr>
+          <tr>${productTimeHeaderRow}</tr>
           <tr>${targetHeaderRow}</tr>
           <tr>${subLabelRow}</tr>
         </thead>

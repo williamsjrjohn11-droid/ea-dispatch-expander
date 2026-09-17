@@ -4380,6 +4380,21 @@ function addDriverDayRowFromSelect(selectEl){
   renderPlanDashboard(date, document.getElementById('planFilterEnd').value);
 }
 
+// Same idea as addDriverDayRowFromSelect, but scoped to one specific site
+// column's OWN date instead of whatever the filter's start-date box says.
+// This is what actually fixes the "site's date doesn't match the filter,
+// so its column is all dashes with nowhere to type" problem — you add the
+// driver right from the column that needs one, on that column's real date,
+// no filter juggling required.
+function addDriverToSpecificDate(driverName, groupKey){
+  if (!driverName) return;
+  const group = findGroup(groupKey);
+  if (!group || !group.date) return;
+  const key = driverName + '|' + group.date;
+  if (!pivotDraftDriverRows.some(r => r.key === key)) pivotDraftDriverRows.push({ key, driver: driverName, date: group.date });
+  renderPlanDashboard(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
+}
+
 // =====================================================================
 // Push to Dispatch Expander — takes one or more Dispatch Planning site
 // columns (already-assigned driver loads) and feeds them straight into the
@@ -4619,9 +4634,23 @@ function renderPlanDashboard(startDate, endDate){
     const gk = escapeHtmlSafe(g.key);
     const ratePerLoad = computedRatePerLoad(g);
     const basedOff = (Number(g.tons_per_load) || 0) * (Number(g.rate_per_ton) || 0);
+    // Drivers who already have a row on THIS site's own date, so they're
+    // not offered again — mirrors the top "+ Add driver" dropdown's own
+    // dedup, just scoped to this column's date instead of the filter's
+    // start date.
+    const namesAlreadyOnThisDate = new Set(
+      rows.filter(r => r.date === g.date).map(r => r.driver)
+    );
+    const driverOptionsForThisSite = driversCache
+      .filter(d => !namesAlreadyOnThisDate.has(d.name))
+      .map(d => `<option value="${escapeHtmlSafe(d.name)}">${escapeHtmlSafe(d.name)}</option>`).join('');
     return `<th colspan="2">
       <input class="plan-cell-input" type="number" step="0.01" value="${ratePerLoad}" onblur="syncGroupBaseField('${gk}','rate_per_load', this.value)" title="Rate/Load">
       <div class="report-stat-label" style="white-space:normal;">based off: ${fmtMoney(basedOff)}</div>
+      <select class="plan-add-driver-select" style="margin-top:4px;" onchange="addDriverToSpecificDate(this.value, '${gk}')">
+        <option value="">+ Add driver (${escapeHtmlSafe(g.date || 'no date yet')})</option>
+        ${driverOptionsForThisSite}
+      </select>
       <span class="delete-site-link" title="Delete this whole site column" onclick="deleteWholeRow('${gk}')">🗑️ Delete site</span>
       <span class="delete-site-link" style="color:var(--amber);" title="Push this site's driver assignments to the Dispatch Expander for messaging" onclick="pushGroupToExpander('${gk}')">📤 Push to Expander</span>
     </th>`;

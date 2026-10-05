@@ -2549,6 +2549,7 @@ function renderDriverMessages(){
     if(dateLine) lines.push(dateLine);
     lines.push('');
     lines.push(`Loads - ${qty}`);
+    if(f.rate_per_ton !== undefined && f.rate_per_ton !== null && f.rate_per_ton !== '') lines.push(`Rate - $${Number(f.rate_per_ton).toFixed(2)}/ton`);
     if(f.product) lines.push(`Product - ${f.product}`);
     if(f.pickupStation || f.pickupAddress){
       lines.push(`Pickup - ${f.pickupStation}${f.pickupStation ? ' —' : ''}`);
@@ -2636,6 +2637,7 @@ function renderCombinedDriverMessages(){
     jobs.forEach((job, i) => {
       const f = multiLoadItems[job.idx];
       lines.push(`${i + 1}. Quantity - ${job.qty}`);
+      if (f.rate_per_ton !== undefined && f.rate_per_ton !== null && f.rate_per_ton !== '') lines.push(`Rate - $${Number(f.rate_per_ton).toFixed(2)}/ton`);
       if (f.product) lines.push(`Product - ${f.product}`);
       if (f.pickupStation || f.pickupAddress) {
         lines.push(`Pickup - ${f.pickupStation}${f.pickupAddress ? ' — ' + f.pickupAddress : ''}`);
@@ -4463,6 +4465,7 @@ function buildExpanderJobFromGroup(group){
   return {
     quantity, product: group.product || '', dayName, date: group.date || '',
     time: group.time || '', company: group.company || '',
+    rate_per_ton: (group.rate_per_ton !== undefined && group.rate_per_ton !== null && group.rate_per_ton !== '') ? group.rate_per_ton : '',
     pickupMapsLink: null, deliveryMapsLink: null, notes: '',
     pickupStation: addr.pickupStation, pickupAddress: addr.pickupAddress,
     pickupSource: addr.pickupAddress ? 'book' : 'none', pickupConfidence: addr.pickupAddress ? 1 : 0,
@@ -4495,6 +4498,12 @@ function pushGroupsToExpander(groupsToPush){
   if (missingProduct.length) {
     const names = missingProduct.map(g => g.site || 'unnamed site').join(', ');
     if (!confirm(`No Product set for: ${names}. Push anyway? (You can still fill it in on the message screen before sending.)`)) return;
+  }
+
+  const missingRate = usable.filter(g => !g.rate_per_ton);
+  if (missingRate.length) {
+    const names = missingRate.map(g => g.site || 'unnamed site').join(', ');
+    if (!confirm(`No Rate set for: ${names} — the driver message would show no rate line (or $0.00/ton). Push anyway?`)) return;
   }
 
   const jobs = usable.map(buildExpanderJobFromGroup);

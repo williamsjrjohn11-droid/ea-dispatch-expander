@@ -128,6 +128,22 @@
     white-space:pre-wrap; word-break:break-word; overflow-wrap:break-word;
     font-family:var(--mono); font-size:13px; line-height:1.5; color:var(--text-dim); margin-bottom:8px;
   }
+  .driver-msg-edit{
+    width:100%; box-sizing:border-box; resize:vertical; background:var(--panel); color:var(--text);
+    border:1px solid var(--border2); border-radius:8px; padding:10px;
+    font-family:var(--mono); font-size:13px; line-height:1.5; margin-bottom:6px;
+  }
+  .driver-note-input{border-color:var(--amber);}
+  .to-cal{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:3px;}
+  .to-cal-head{font-size:10px; color:var(--text3); text-align:center; padding:2px 0;}
+  .to-day{min-height:58px; background:var(--panel2); border:1px solid var(--border2); border-radius:6px; padding:3px; cursor:pointer; overflow:hidden;}
+  .to-day.to-blank{background:transparent; border-color:transparent; cursor:default;}
+  .to-day.to-today{border-color:var(--amber);}
+  .to-day-num{font-size:11px; color:var(--text-dim); margin-bottom:2px;}
+  .to-chip{display:block; font-size:9px; line-height:1.25; background:var(--amber-dim); color:var(--amber); border-radius:3px; padding:1px 3px; margin-bottom:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .to-banner{background:var(--amber-dim); border:1px solid var(--amber); border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12px; line-height:1.6; color:var(--text);}
+  .to-banner.to-warn{border-color:var(--red); color:var(--red); background:rgba(255,80,80,.08);}
+  .driver-msg-actions button, .driver-msg-actions a.btn-text{white-space:nowrap; padding-left:8px; padding-right:8px;}
   .driver-msg-actions{display:flex; gap:8px;}
   .driver-msg-actions button{width:auto; margin:0; padding:9px 14px; font-size:13px; flex:1;}
   .btn-text{background:var(--blue); color:#0a1626;}
@@ -380,6 +396,7 @@
       </div>
       <div class="strategy-row" style="margin-bottom:14px;">
         <button class="btn-secondary" style="flex:1; margin:0; color:var(--amber);" onclick="pushDayToExpander()">📤 Push a whole day to Expander</button>
+        <button class="btn-secondary" style="flex:1; margin:0;" onclick="openTimeOff()">🗓️ Days off</button>
       </div>
 
       <div id="planDashboardBody"><div class="plan-loading">Loading...</div></div>
@@ -423,6 +440,7 @@
         </select>
       </div>
       <button class="off-toggle" style="background:none; border:none; cursor:pointer; padding:0; color:var(--amber); margin-bottom:14px;" onclick="renameSelectedCustomer()">✏️ Rename the selected customer</button>
+      <button class="btn-secondary" style="margin-bottom:14px;" onclick="openLaneRates()">💲 Lane rates (view / edit / add)</button>
 
       <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
         <label style="margin-bottom:8px; display:block;">Add a new location</label>
@@ -450,6 +468,63 @@
       </div>
 
       <div id="addrBookList"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="timeOffModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Driver days off</h2>
+        <button class="modal-close" onclick="closeTimeOff()">Close</button>
+      </div>
+      <div class="tonnage-hint" style="margin-bottom:10px;">Mark when a driver is off. It saves to your Google Sheet (DriverTimeOff tab), flags the Planning grid, and shows as Off on the message screen.</div>
+
+      <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
+        <label style="margin-bottom:8px; display:block;">Add days off</label>
+        <select class="search-input" id="toDriver" style="margin-bottom:8px;"></select>
+        <div class="strategy-row" style="margin-bottom:8px;">
+          <div style="flex:1;"><div class="tonnage-hint">First day off</div><input type="date" class="search-input" id="toStart" style="margin-bottom:0;" onchange="syncTimeOffEnd()"></div>
+          <div style="flex:1;"><div class="tonnage-hint">Last day off</div><input type="date" class="search-input" id="toEnd" style="margin-bottom:0;"></div>
+        </div>
+        <input type="text" class="search-input" id="toReason" placeholder="Reason (optional) — Vacation, Doctor..." style="margin-bottom:8px;">
+        <button class="btn-secondary" onclick="saveTimeOffEntry()">+ Save days off</button>
+        <div id="toStatus" class="tonnage-hint"></div>
+      </div>
+
+      <div class="strategy-row" style="margin-bottom:8px; align-items:center;">
+        <button class="btn-secondary" style="flex:0 0 52px; margin:0;" onclick="shiftTimeOffMonth(-1)">‹</button>
+        <div id="toMonthLabel" style="flex:1; text-align:center; font-weight:700;"></div>
+        <button class="btn-secondary" style="flex:0 0 52px; margin:0;" onclick="shiftTimeOffMonth(1)">›</button>
+      </div>
+      <div id="toCalendar"></div>
+
+      <label style="margin:14px 0 8px; display:block;">Current &amp; upcoming days off</label>
+      <div id="toList"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="laneRatesModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Lane rates</h2>
+        <button class="modal-close" onclick="closeModal('laneRatesModal')">Close</button>
+      </div>
+      <div class="tonnage-hint" style="margin-bottom:10px;">Saved pickup-to-delivery rates ($/ton) for your customers. Changes save to your Google Sheet (CustomRates tab) and show up in the Dispatch Planning site dropdown.</div>
+
+      <div style="background:var(--panel2); border:1px solid var(--border2); border-radius:8px; padding:12px; margin-bottom:14px;">
+        <label style="margin-bottom:8px; display:block;">Add a lane</label>
+        <input type="text" class="search-input" id="laneNewCompany" list="laneCompanyList" placeholder="Customer (pick or type new)" style="margin-bottom:8px;">
+        <input type="text" class="search-input" id="laneNewOrigin" list="laneLocList" placeholder="Pickup / origin name" style="margin-bottom:8px;">
+        <input type="text" class="search-input" id="laneNewDest" list="laneLocList" placeholder="Delivery / destination name" style="margin-bottom:8px;">
+        <input class="search-input" type="number" step="0.01" id="laneNewRate" placeholder="$/ton" style="margin-bottom:8px;">
+        <button class="btn-secondary" onclick="addLaneRate()">+ Save lane</button>
+        <div id="laneStatus" class="tonnage-hint"></div>
+        <datalist id="laneCompanyList"></datalist>
+        <datalist id="laneLocList"></datalist>
+      </div>
+
+      <input type="text" class="search-input" id="laneSearch" placeholder="Search lanes by customer or place..." oninput="renderLaneRates()">
+      <div id="laneRatesList"></div>
     </div>
   </div>
 
@@ -675,6 +750,216 @@ function openAddressBook(){
   populateCustomerDropdowns();
   renderAddressBook();
 }
+// ---------- Days-off banner + calendar screen ----------
+function fmtOffDay(key){
+  return new Date(key + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
+}
+function fmtOffRange(t){
+  return t.start_date === t.end_date ? fmtOffDay(t.start_date) : fmtOffDay(t.start_date) + ' – ' + fmtOffDay(t.end_date);
+}
+
+// Top-of-Planning strip: who's off in the next 7 days, plus a red warning for
+// any loads already planned on a day that driver is off (within the filter range).
+function timeOffBannerHtml(startDate, endDate){
+  let html = '';
+  const today = localDateKey(new Date());
+  const weekEnd = new Date(); weekEnd.setDate(weekEnd.getDate() + 6);
+  const endKey = localDateKey(weekEnd);
+  const upcoming = timeOffCache
+    .filter(t => t.end_date >= today && t.start_date <= endKey)
+    .sort((a, b) => a.start_date.localeCompare(b.start_date) || a.driver.localeCompare(b.driver));
+
+  const conflicts = [];
+  planRowsInRange(startDate, endDate).forEach(p => {
+    if ((Number(p.loads_to_give) || 0) <= 0) return;
+    const off = timeOffFor(p.driver, p.date);
+    if (off) conflicts.push(`${p.driver} has ${Number(p.loads_to_give)} load${Number(p.loads_to_give) === 1 ? '' : 's'} on ${fmtOffDay(p.date)} but is marked off${off.reason ? ' (' + off.reason + ')' : ''}`);
+  });
+  if (conflicts.length) {
+    html += `<div class="to-banner to-warn"><b>⚠ Check these:</b><br>${conflicts.map(escapeHtmlSafe).join('<br>')}</div>`;
+  }
+  if (upcoming.length) {
+    html += `<div class="to-banner"><b>🗓️ Off in the next 7 days:</b><br>${upcoming.map(t =>
+      `${escapeHtmlSafe(t.driver)}: ${escapeHtmlSafe(fmtOffRange(t))}${t.reason ? ' (' + escapeHtmlSafe(t.reason) + ')' : ''}`).join('<br>')}</div>`;
+  }
+  return html;
+}
+
+let timeOffMonth = null; // { y, m } being shown on the calendar
+function openTimeOff(){
+  const now = new Date();
+  if (!timeOffMonth) timeOffMonth = { y: now.getFullYear(), m: now.getMonth() };
+  document.getElementById('timeOffModal').classList.add('show');
+  document.getElementById('toDriver').innerHTML = '<option value="">Select driver...</option>' +
+    driversCache.map(d => `<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('');
+  document.getElementById('toStatus').textContent = '';
+  renderTimeOff();
+}
+function closeTimeOff(){
+  closeModal('timeOffModal');
+  if (document.getElementById('dispatchPlanModal').classList.contains('show')) {
+    renderPlanDashboard(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
+  }
+  renderDriverAssignment();
+}
+function shiftTimeOffMonth(delta){
+  const d = new Date(timeOffMonth.y, timeOffMonth.m + delta, 1);
+  timeOffMonth = { y: d.getFullYear(), m: d.getMonth() };
+  renderTimeOff();
+}
+function syncTimeOffEnd(){
+  const s = document.getElementById('toStart').value, e = document.getElementById('toEnd');
+  if (!e.value || e.value < s) e.value = s;
+}
+function pickTimeOffDay(key){
+  document.getElementById('toStart').value = key;
+  document.getElementById('toEnd').value = key;
+  document.getElementById('toStart').scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+}
+
+function renderTimeOff(){
+  const { y, m } = timeOffMonth;
+  document.getElementById('toMonthLabel').textContent = new Date(y, m, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const first = new Date(y, m, 1).getDay();
+  const days = new Date(y, m + 1, 0).getDate();
+  const today = localDateKey(new Date());
+  let cells = ['S','M','T','W','T','F','S'].map(d => `<div class="to-cal-head">${d}</div>`).join('');
+  for (let i = 0; i < first; i++) cells += '<div class="to-day to-blank"></div>';
+  for (let day = 1; day <= days; day++) {
+    const key = `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const offs = timeOffCache.filter(t => t.start_date <= key && key <= t.end_date);
+    const shown = offs.slice(0, 3).map(t => `<span class="to-chip" title="${escapeHtml(t.driver)}${t.reason ? ' — ' + escapeHtml(t.reason) : ''}">${escapeHtml(t.driver.split(' ')[0])}</span>`).join('');
+    const more = offs.length > 3 ? `<span class="to-chip">+${offs.length - 3} more</span>` : '';
+    cells += `<div class="to-day ${key === today ? 'to-today' : ''}" onclick="pickTimeOffDay('${key}')"><div class="to-day-num">${day}</div>${shown}${more}</div>`;
+  }
+  document.getElementById('toCalendar').innerHTML = `<div class="to-cal">${cells}</div>`;
+
+  const today2 = today;
+  const list = timeOffCache.filter(t => t.end_date >= today2)
+    .sort((a, b) => a.start_date.localeCompare(b.start_date) || a.driver.localeCompare(b.driver));
+  document.getElementById('toList').innerHTML = list.length ? list.map(t => `
+    <div class="driver-msg-card" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+      <div><div style="font-weight:600;">${escapeHtml(t.driver)}</div>
+        <div class="tonnage-hint" style="margin:0;">${escapeHtml(fmtOffRange(t))}${t.reason ? ' · ' + escapeHtml(t.reason) : ''}</div></div>
+      <button class="btn-secondary" style="width:auto; margin:0; padding:8px 12px;" onclick="deleteTimeOffEntry('${escapeHtml(t.off_id)}')">Remove</button>
+    </div>`).join('') : '<div class="tonnage-hint">No days off saved yet.</div>';
+}
+
+async function saveTimeOffEntry(){
+  const driver = document.getElementById('toDriver').value;
+  const start = document.getElementById('toStart').value;
+  const end = document.getElementById('toEnd').value || start;
+  const reason = document.getElementById('toReason').value.trim();
+  const status = document.getElementById('toStatus');
+  if (!driver || !start) { alert('Pick a driver and the first day off.'); return; }
+  if (end < start) { alert('The last day off can\'t be before the first day.'); return; }
+  const overlap = timeOffCache.find(t => t.driver === driver && t.start_date <= end && start <= t.end_date);
+  if (overlap && !confirm(`${driver} already has days off ${fmtOffRange(overlap)}. Add this too?`)) return;
+  try {
+    const res = await fetchBridge('saveTimeOff', { payload: JSON.stringify({ driver, start_date: start, end_date: end, reason }) });
+    timeOffCache.push({ off_id: res.off_id, driver, start_date: start, end_date: end, reason });
+    const planned = planCache.filter(p => p.driver === driver && p.date >= start && p.date <= end && (Number(p.loads_to_give) || 0) > 0);
+    status.textContent = `Saved: ${driver} off ${fmtOffRange({ start_date: start, end_date: end })}.` +
+      (planned.length ? ` ⚠ Heads up: ${driver} already has loads planned on ${Array.from(new Set(planned.map(p => p.date))).join(', ')}.` : '');
+    document.getElementById('toReason').value = '';
+    renderTimeOff();
+  } catch (e) {
+    status.textContent = 'Could not save — ' + e.message;
+  }
+}
+
+async function deleteTimeOffEntry(offId){
+  const t = timeOffCache.find(x => x.off_id === offId);
+  if (!t || !confirm(`Remove ${t.driver}'s days off (${fmtOffRange(t)})?`)) return;
+  try {
+    await fetchBridge('deleteTimeOff', { offId });
+    timeOffCache = timeOffCache.filter(x => x.off_id !== offId);
+    document.getElementById('toStatus').textContent = 'Removed.';
+    renderTimeOff();
+  } catch (e) {
+    document.getElementById('toStatus').textContent = 'Could not remove — ' + e.message;
+  }
+}
+
+// ---------- LANE RATES screen ----------
+// View / edit / add the saved origin->destination $/ton rates (CustomRates
+// tab). Uses the existing saveCustomRate bridge action, which already adds a
+// new row or updates the rate on a matching one — no backend change needed.
+// (The built-in Amrize price table is not editable here, and the backend has
+// no delete action, so lanes can be added and changed but not removed.)
+function openLaneRates(){
+  document.getElementById('laneRatesModal').classList.add('show');
+  const companies = new Set(getKnownCustomers());
+  customRatesCache.forEach(r => { if (r.company) companies.add(r.company); });
+  companies.delete(defaultCustomerLabel); // built-in book uses the Amrize rate table, not saved lanes
+  document.getElementById('laneCompanyList').innerHTML = Array.from(companies).sort().map(c => `<option value="${escapeHtml(c)}">`).join('');
+  document.getElementById('laneLocList').innerHTML = getUniqueLocations().map(l => `<option value="${escapeHtml(l.name)}">`).join('');
+  document.getElementById('laneStatus').textContent = '';
+  renderLaneRates();
+}
+
+function renderLaneRates(){
+  const q = (document.getElementById('laneSearch').value || '').trim().toLowerCase();
+  const rows = customRatesCache
+    .map((r, i) => ({ r, i }))
+    .filter(x => !q || `${x.r.company} ${x.r.origin_name} ${x.r.destination_name}`.toLowerCase().includes(q))
+    .sort((a, b) => (a.r.company + a.r.origin_name + a.r.destination_name).localeCompare(b.r.company + b.r.origin_name + b.r.destination_name));
+  const list = document.getElementById('laneRatesList');
+  if (!rows.length) { list.innerHTML = '<div class="tonnage-hint">No saved lanes found.</div>'; return; }
+  list.innerHTML = rows.map(({ r, i }) => `
+    <div class="driver-msg-card" style="margin-bottom:8px;">
+      <div class="tonnage-hint" style="margin-bottom:4px;">${escapeHtml(r.company)}</div>
+      <div style="font-weight:600; margin-bottom:8px;">${escapeHtml(r.origin_name)} → ${escapeHtml(r.destination_name)}</div>
+      <div class="strategy-row" style="margin-bottom:0;">
+        <input class="search-input" type="number" step="0.01" id="laneRate_${i}" value="${Number(r.rate_per_ton)}" style="margin-bottom:0;" placeholder="$/ton">
+        <button class="btn-secondary" style="margin:0;" onclick="saveLaneRateRow(${i})">Save</button>
+      </div>
+    </div>`).join('');
+}
+
+async function saveLaneRateRow(i){
+  const r = customRatesCache[i];
+  const input = document.getElementById('laneRate_' + i);
+  const rate = parseFloat(input.value);
+  const status = document.getElementById('laneStatus');
+  if (!r || isNaN(rate) || rate <= 0) { alert('Enter a rate greater than 0.'); return; }
+  try {
+    await fetchBridge('saveCustomRate', { company: r.company, originName: r.origin_name, destinationName: r.destination_name, ratePerTon: rate });
+    const old = Number(r.rate_per_ton);
+    r.rate_per_ton = rate;
+    status.textContent = `Saved: ${r.origin_name} → ${r.destination_name} changed from $${old.toFixed(2)} to $${rate.toFixed(2)}/ton.`;
+    renderLaneRates();
+  } catch (e) {
+    status.textContent = 'Could not save — ' + e.message;
+  }
+}
+
+async function addLaneRate(){
+  const company = document.getElementById('laneNewCompany').value.trim();
+  const origin = document.getElementById('laneNewOrigin').value.trim();
+  const dest = document.getElementById('laneNewDest').value.trim();
+  const rate = parseFloat(document.getElementById('laneNewRate').value);
+  const status = document.getElementById('laneStatus');
+  if (!company || !origin || !dest || isNaN(rate) || rate <= 0) { alert('Fill in customer, pickup, delivery, and a rate greater than 0.'); return; }
+  if (company.toLowerCase() === defaultCustomerLabel.toLowerCase()) {
+    alert(`${defaultCustomerLabel} lanes use the built-in rate table. Use a different customer name for saved lanes.`);
+    return;
+  }
+  const existing = customRatesCache.find(r => (r.company || '').toLowerCase() === company.toLowerCase() &&
+    (r.origin_name || '').toLowerCase() === origin.toLowerCase() && (r.destination_name || '').toLowerCase() === dest.toLowerCase());
+  if (existing && !confirm(`This lane is already saved at $${Number(existing.rate_per_ton).toFixed(2)}/ton. Change it to $${rate.toFixed(2)}/ton?`)) return;
+  try {
+    await fetchBridge('saveCustomRate', { company, originName: origin, destinationName: dest, ratePerTon: rate });
+    if (existing) existing.rate_per_ton = rate;
+    else customRatesCache.push({ company, origin_name: origin, destination_name: dest, rate_per_ton: rate });
+    status.textContent = `Saved: ${company} — ${origin} → ${dest} at $${rate.toFixed(2)}/ton.`;
+    ['laneNewOrigin', 'laneNewDest', 'laneNewRate'].forEach(id => { document.getElementById(id).value = ''; });
+    renderLaneRates();
+  } catch (e) {
+    status.textContent = 'Could not save — ' + e.message;
+  }
+}
+
 function openHelp(){
   document.getElementById('helpModal').classList.add('show');
 }
@@ -1479,11 +1764,18 @@ function describeJobForPrompt(f){
 // Called for a brand-new single-dispatch parse (not part of a multi-load
 // session) — starts every per-driver assignment fresh, same as pasting a
 // whole new dispatch always has.
+// Per-driver IMPORTANT notes and hand-edited message text. Both last only for
+// the current dispatch session — cleared whenever a new paste/push starts.
+let driverNotes = {};        // driverName -> note text (shown at the very top of that driver's message)
+let driverMsgOverrides = {}; // panel|driverName -> { base, text } (a hand-edited message)
+function clearDriverMessageEdits(){ driverNotes = {}; driverMsgOverrides = {}; }
+
 function resetToSingleJobSession(){
   document.getElementById('multiLoadPanel').style.display = 'none';
   multiLoadItems = [];
   jobAssignments = {};
   assignments = {};
+  clearDriverMessageEdits();
 }
 
 function checkJobNeedsDetails(){
@@ -2015,6 +2307,7 @@ function startMultiLoadFlow(items, fullText){
   Object.keys(multiLoadSavedFlags).forEach(k => delete multiLoadSavedFlags[k]);
   jobAssignments = {}; // fresh session — new paste, new set of jobs
   assignments = {};
+  clearDriverMessageEdits();
 
   document.getElementById('multiLoadPanel').style.display = 'block';
   renderMultiLoadChips();
@@ -2280,7 +2573,30 @@ const DRIVER_CACHE_KEY = 'ea_dispatch_drivers_cache';
 let driversCache = [];
 let assignments = {}; // driverName -> quantity assigned, for whichever job is active
 let jobAssignments = {}; // per-job store: job key -> {driverName: qty}, so switching jobs doesn't lose anything
-const driverOffToday = new Set(); // session-only, resets on reload
+const driverOffToday = new Set(); // session-only manual "off today" taps, resets on reload
+const driverForcedOn = new Set(); // drivers you tapped "include" on even though the calendar says they're off
+
+// ---------- Driver days off (saved in the Sheet's DriverTimeOff tab) ----------
+function localDateKey(date){ // yyyy-mm-dd in the device's own time zone (toISOString would roll to tomorrow in the evening)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+let timeOffCache = []; // { off_id, driver, start_date, end_date, reason }
+async function loadTimeOff(){
+  try { const d = await fetchBridge('getTimeOff'); timeOffCache = d.timeOff || []; }
+  catch (e) { timeOffCache = []; }
+}
+function timeOffFor(name, dateKey){
+  if (!name || !dateKey) return null;
+  return timeOffCache.find(t => t.driver === name && t.start_date <= dateKey && dateKey <= t.end_date) || null;
+}
+function dispatchDateKey(){
+  const m = currentFields && currentFields.date && String(currentFields.date).match(/^\d{4}-\d{2}-\d{2}/);
+  return m ? m[0] : localDateKey(new Date());
+}
+function isDriverOffToday(name){
+  if (driverOffToday.has(name)) return true;
+  return !!timeOffFor(name, dispatchDateKey()) && !driverForcedOn.has(name);
+}
 
 async function fetchBridge(action, params = {}) {
   const url = new URL(BRIDGE_URL);
@@ -2358,7 +2674,10 @@ function renderDriverAssignment(){
   }
 
   list.innerHTML = driversCache.map(d => {
-    const isOff = driverOffToday.has(d.name);
+    const isOff = isDriverOffToday(d.name);
+    const calOff = timeOffFor(d.name, dispatchDateKey());
+    const offWhen = dispatchDateKey() === localDateKey(new Date()) ? 'today' : 'on ' + dispatchDateKey();
+    const offLabel = '🚫 Off ' + offWhen + (calOff ? ' (' + (calOff.reason || 'days off') + ')' : '') + ' · tap to include';
     const safeName = escapeHtml(d.name).replace(/'/g,"\\'");
     return `
     <div class="driver-row ${isOff ? 'off-today' : ''}">
@@ -2375,7 +2694,7 @@ function renderDriverAssignment(){
           ${formatHHMM(d.start_time) ? 'Starts ' + escapeHtml(formatHHMM(d.start_time)) + ' · edit' : '+ set start time'}
         </div>
         <div class="off-toggle ${isOff ? 'is-off' : 'is-working'}" onclick="toggleDriverOff('${safeName}')">
-          ${isOff ? '🚫 Off today · tap to include' : '✓ Working today · tap to mark off'}
+          ${isOff ? escapeHtml(offLabel) : '✓ Working today · tap to mark off'}
         </div>
       </div>
       <input type="number" min="0" class="qty-input" value="${assignments[d.name] || ''}"
@@ -2457,10 +2776,12 @@ async function editStartTime(driverName, currentStartTime){
 // from all three assignment strategies and the goal-check capacity total,
 // without touching anything saved to their profile in the Sheet.
 function toggleDriverOff(driverName){
-  if (driverOffToday.has(driverName)) {
+  if (isDriverOffToday(driverName)) {
     driverOffToday.delete(driverName);
+    if (timeOffFor(driverName, dispatchDateKey())) driverForcedOn.add(driverName); // calendar says off — you chose to include them anyway
   } else {
     driverOffToday.add(driverName);
+    driverForcedOn.delete(driverName);
     delete assignments[driverName]; // clear any manual assignment they had
   }
   renderDriverAssignment();
@@ -2526,6 +2847,106 @@ function updateTotals(){
   renderDriverMessages();
 }
 
+// ---------- Editable driver messages + IMPORTANT note ----------
+// Every driver card gets an "Important note" box (goes at the very top of
+// that driver's message) and the message itself is an editable text box.
+// Safety rule: a hand-edited message is only kept while the underlying
+// generated message is unchanged. If you change loads/rate/etc. afterward, the
+// edit is dropped and the card says so, so a stale hand-edit never goes out.
+const driverMsgBases = {}; // card key -> latest generated (note-free) message
+
+function notePrefix(note){
+  const n = (note || '').trim();
+  return n ? `⚠️ IMPORTANT: ${n}\n\n` : '';
+}
+
+function driverMsgCardHtml(panel, driverName, phone, headerText, baseMsg){
+  const key = panel + '|' + driverName;
+  let ov = driverMsgOverrides[key];
+  let reset = false;
+  if (ov && ov.base !== baseMsg) { delete driverMsgOverrides[key]; ov = null; reset = true; }
+  driverMsgBases[key] = baseMsg;
+  const note = driverNotes[driverName] || '';
+  const body = ov ? ov.text : notePrefix(note) + baseMsg;
+  const msgId = 'msg_' + panel + '_' + driverName.replace(/[^a-z0-9]/gi, '_');
+  const smsHref = buildSmsHref(phone, body);
+  const dn = escapeHtml(driverName).replace(/'/g, '&#39;');
+  return `
+    <div class="driver-msg-card" data-key="${escapeHtml(key)}" data-driver="${escapeHtml(driverName)}" data-msgid="${msgId}" data-phone="${escapeHtml(phone || '')}">
+      <div class="driver-msg-head">
+        <span class="driver-name">${escapeHtml(headerText)}</span>
+      </div>
+      <input type="text" class="search-input driver-note-input" style="margin-bottom:8px;" placeholder="⚠️ Important note for ${escapeHtml(driverName)} (goes at the very top)" value="${escapeHtml(note)}" oninput="handleDriverNoteInput('${dn}', this.value)">
+      <textarea class="driver-msg-edit" id="${msgId}" rows="${Math.min(22, Math.max(8, body.split('\n').length + 1))}" oninput="handleDriverMsgEdit('${escapeHtml(key)}')">${escapeHtml(body)}</textarea>
+      <div class="tonnage-hint" id="${msgId}_hint" style="margin-bottom:8px;">${reset ? 'Loads/details changed, so your hand edits to this message were reset.' : (ov ? 'Edited by hand.' : '')}</div>
+      <div class="driver-msg-actions">
+        <button class="btn-secondary" onclick="copyDriverMsg('${msgId}')">Copy</button>
+        <button class="btn-secondary" onclick="resetDriverMsg('${escapeHtml(key)}')">Reset</button>
+        <a class="btn-text" id="${msgId}_sms" href="${smsHref || '#'}" style="text-decoration:none; display:${smsHref ? 'flex' : 'none'}; align-items:center; justify-content:center;">Text driver</a>
+      </div>
+    </div>`;
+}
+
+function refreshDriverCardSms(card){
+  const ta = document.getElementById(card.dataset.msgid);
+  const a = document.getElementById(card.dataset.msgid + '_sms');
+  if (!ta || !a) return;
+  const href = buildSmsHref(card.dataset.phone, ta.value);
+  a.href = href || '#';
+  a.style.display = href ? 'flex' : 'none';
+}
+
+// Typing in a note updates every card for that driver in place (no re-render,
+// so the box keeps focus). A hand-edited message keeps its edits — only the
+// note line at its top is swapped.
+function handleDriverNoteInput(driverName, value){
+  const oldNote = driverNotes[driverName] || '';
+  driverNotes[driverName] = value;
+  document.querySelectorAll('.driver-msg-card').forEach(card => {
+    if (card.dataset.driver !== driverName) return;
+    const key = card.dataset.key;
+    const ta = document.getElementById(card.dataset.msgid);
+    const hint = document.getElementById(card.dataset.msgid + '_hint');
+    const other = card.querySelector('.driver-note-input');
+    if (other && other.value !== value) other.value = value;
+    const ov = driverMsgOverrides[key];
+    if (ov) {
+      const oldP = notePrefix(oldNote);
+      if (ov.text.startsWith(oldP)) {
+        ov.text = notePrefix(value) + ov.text.slice(oldP.length);
+      } else {
+        delete driverMsgOverrides[key]; // couldn't find the old note line — rebuild cleanly
+        ov.text = null;
+      }
+    }
+    const o2 = driverMsgOverrides[key];
+    ta.value = o2 ? o2.text : notePrefix(value) + (driverMsgBases[key] || '');
+    if (hint && !o2) hint.textContent = '';
+    refreshDriverCardSms(card);
+  });
+}
+
+function handleDriverMsgEdit(key){
+  const card = Array.from(document.querySelectorAll('.driver-msg-card')).find(c => c.dataset.key === key);
+  if (!card) return;
+  const ta = document.getElementById(card.dataset.msgid);
+  driverMsgOverrides[key] = { base: driverMsgBases[key], text: ta.value };
+  const hint = document.getElementById(card.dataset.msgid + '_hint');
+  if (hint) hint.textContent = 'Edited by hand.';
+  refreshDriverCardSms(card);
+}
+
+function resetDriverMsg(key){
+  delete driverMsgOverrides[key];
+  const card = Array.from(document.querySelectorAll('.driver-msg-card')).find(c => c.dataset.key === key);
+  if (!card) return;
+  const ta = document.getElementById(card.dataset.msgid);
+  ta.value = notePrefix(driverNotes[card.dataset.driver]) + (driverMsgBases[key] || '');
+  const hint = document.getElementById(card.dataset.msgid + '_hint');
+  if (hint) hint.textContent = '';
+  refreshDriverCardSms(card);
+}
+
 function renderDriverMessages(){
   const assigned = driversCache.filter(d => assignments[d.name] > 0);
   const panel = document.getElementById('driverMessagesPanel');
@@ -2570,21 +2991,7 @@ function renderDriverMessages(){
     if (f.pickupMapsLink) { lines.push(''); lines.push('Pickup location: ' + f.pickupMapsLink); }
 
     const msg = lines.join('\n');
-    const msgId = 'msg_' + d.name.replace(/[^a-z0-9]/gi, '_');
-    const smsHref = buildSmsHref(d.phone, msg);
-
-    return `
-      <div class="driver-msg-card">
-        <div class="driver-msg-head">
-          <span class="driver-name">${escapeHtml(d.name)} — ${qty} load${qty==1?'':'s'} across 1 job</span>
-        </div>
-        <div class="driver-msg-body" id="${msgId}">${escapeHtml(msg)}</div>
-        <div class="driver-msg-actions">
-          <button class="btn-secondary" onclick="copyDriverMsg('${msgId}')">Copy</button>
-          ${smsHref ? `<a class="btn-text" href="${smsHref}" style="text-decoration:none; display:flex; align-items:center; justify-content:center;">Text driver</a>` : ''}
-        </div>
-      </div>
-    `;
+    return driverMsgCardHtml('single', d.name, d.phone, `${d.name} — ${qty} load${qty==1?'':'s'} across 1 job`, msg);
   }).join('');
 }
 
@@ -2650,27 +3057,15 @@ function renderCombinedDriverMessages(){
     });
 
     const msg = lines.join('\n');
-    const msgId = 'combined_msg_' + driverName.replace(/[^a-z0-9]/gi, '_');
     const driverObj = driversCache.find(d => d.name === driverName);
-    const smsHref = buildSmsHref(driverObj && driverObj.phone, msg);
-
-    return `
-      <div class="driver-msg-card">
-        <div class="driver-msg-head">
-          <span class="driver-name">${escapeHtml(driverName)} — ${totalQty} load${totalQty === 1 ? '' : 's'} across ${jobs.length} job${jobs.length === 1 ? '' : 's'}</span>
-        </div>
-        <div class="driver-msg-body" id="${msgId}">${escapeHtml(msg)}</div>
-        <div class="driver-msg-actions">
-          <button class="btn-secondary" onclick="copyDriverMsg('${msgId}')">Copy</button>
-          ${smsHref ? `<a class="btn-text" href="${smsHref}" style="text-decoration:none; display:flex; align-items:center; justify-content:center;">Text driver</a>` : ''}
-        </div>
-      </div>
-    `;
+    return driverMsgCardHtml('combined', driverName, driverObj && driverObj.phone,
+      `${driverName} — ${totalQty} load${totalQty === 1 ? '' : 's'} across ${jobs.length} job${jobs.length === 1 ? '' : 's'}`, msg);
   }).join('');
 }
 
 function copyDriverMsg(msgId){
-  const text = document.getElementById(msgId).textContent;
+  const el = document.getElementById(msgId);
+  const text = (el.value !== undefined && el.tagName === 'TEXTAREA') ? el.value : el.textContent;
   copyText(text, () => {
     const flag = document.getElementById('copiedFlag');
     flag.classList.add('show');
@@ -2727,6 +3122,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const dateInput = document.getElementById('completionDate');
   if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
   refreshDrivers();
+  loadTimeOff().then(() => { renderDriverAssignment(); });
   loadCustomAddresses();
   loadCustomRates();
 });
@@ -3174,7 +3570,7 @@ async function applyStrategy(strategy){
     });
   } catch (e) { /* fine to proceed without workload data */ }
 
-  const drivers = driversCache.filter(d => !driverOffToday.has(d.name));
+  const drivers = driversCache.filter(d => !isDriverOffToday(d.name));
   if (drivers.length === 0 || totalQty === 0) {
     document.getElementById('strategyResults').innerHTML = '<div class="empty-hint">No drivers available or quantity to plan.</div>';
     return;
@@ -3901,6 +4297,13 @@ async function syncDriverAssigned(groupKey, driverName, rawValue){
   if (!group) return;
   const loadsToGive = parseFloat(rawValue) || 0;
   const existing = group.drivers[driverName];
+  const offEntry = loadsToGive > 0 ? timeOffFor(driverName, group.date) : null;
+  if (offEntry && !(existing && Number(existing.loads_to_give) === loadsToGive)) {
+    if (!confirm(`${driverName} is marked OFF on ${group.date}${offEntry.reason ? ' (' + offEntry.reason + ')' : ''}. Give them ${loadsToGive} load${loadsToGive === 1 ? '' : 's'} anyway?`)) {
+      renderPlanDashboard(document.getElementById('planFilterStart').value, document.getElementById('planFilterEnd').value);
+      return;
+    }
+  }
   if (!group.rate_per_load) group.rate_per_load = (Number(group.tons_per_load) || 0) * (Number(group.rate_per_ton) || 0);
 
   const payload = { date: group.date, driver: driverName, site: group.site, company: group.company,
@@ -4116,6 +4519,10 @@ function computeQEFlags(row){
   }
   if (row.existingPlanId && Number(row.existingLoads) !== (parseFloat(row.loads) || 0)) {
     flags.push(`${row.driver} already has ${fmtNum(row.existingLoads)} loads on this site today — pushing will change it to ${fmtNum(row.loads) || 0}.`);
+  }
+  const qeOff = (parseFloat(row.loads) || 0) > 0 ? timeOffFor(row.driver, row.date) : null;
+  if (qeOff) {
+    flags.push(`${row.driver} is marked OFF on ${row.date}${qeOff.reason ? ' (' + qeOff.reason + ')' : ''} (${qeOff.start_date} to ${qeOff.end_date}) — confirm you really want to give them loads that day.`);
   }
   const sig = JSON.stringify(flags);
   if (sig !== row.lastFlagSig) row.confirmed = false; // anything new to confirm resets the checkbox
@@ -4521,6 +4928,7 @@ function pushGroupsToExpander(groupsToPush){
     activeMultiLoadIndex = 0;
     Object.keys(multiLoadSavedFlags).forEach(k => delete multiLoadSavedFlags[k]);
     jobAssignments = {};
+    clearDriverMessageEdits();
     usable.forEach((g, i) => { jobAssignments['multi_' + i] = buildAssignmentsForGroup(g); });
     // loadMultiLoadItem(0) below immediately does jobAssignments['multi_0'] =
     // assignments (saving "whatever job we're leaving") before reading it
@@ -4584,7 +4992,7 @@ function renderPlanDashboard(startDate, endDate){
     dailyGoalHtml = `<div class="report-stat"><span class="report-stat-label">Daily $1,000 goal</span><span class="plan-daily-goal ${met ? 'met' : 'short'}">${fmtMoney(totalCompletedDollars)} of $1,000.00</span></div>`;
   }
 
-  const summaryHtml = `
+  const summaryHtml = timeOffBannerHtml(startDate, endDate) + `
     <div class="report-row" style="margin-bottom:12px;">
       <div class="report-stat"><span class="report-stat-label">Assigned</span>${totalAssigned}</div>
       <div class="report-stat"><span class="report-stat-label">Completed</span>${totalCompleted}</div>
@@ -4620,7 +5028,7 @@ function renderPlanDashboard(startDate, endDate){
     return `<th colspan="2" style="min-width:170px;">
       <select class="plan-cell-input" onchange="handleSiteSelectChange('${gk}', this)">
         ${!g.site ? '<option value="" selected>Select site...</option>' : ''}
-        ${!siteMatchesKnown && g.site ? `<option value="" selected>${escapeHtmlSafe(g.site)}</option>` : ''}
+        ${!siteMatchesKnown && g.site ? `<option value="" selected>${escapeHtmlSafe(g.site)}${Number(g.rate_per_ton) > 0 ? ' ($' + Number(g.rate_per_ton).toFixed(2) + '/ton)' : ''}</option>` : ''}
         ${knownSites.map(s => `<option value="${escapeHtmlSafe(s.key)}" ${siteLabelFor(s)===g.site ? 'selected' : ''}>${escapeHtmlSafe(s.label)}</option>`).join('')}
         <option value="__custom__">+ Custom site...</option>
       </select>
@@ -4695,10 +5103,16 @@ function renderPlanDashboard(startDate, endDate){
       const ratePerLoad = computedRatePerLoad(g);
       const assignedDollars = d ? dispatched * ratePerLoad : 0;
       rowTotal += assignedDollars;
-      return `<td><input class="plan-cell-input" type="number" style="width:55px;" value="${dispatched}" onblur="syncDriverAssigned('${gk}','${escapeHtmlSafe(row.driver).replace(/'/g,"\\'")}', this.value)"></td>` +
+      const offHere = timeOffFor(row.driver, row.date);
+      const offStyle = (offHere && dispatched > 0) ? 'border-color:var(--red); background:rgba(255,80,80,.15);' : '';
+      return `<td><input class="plan-cell-input" type="number" style="width:55px;${offStyle}" value="${dispatched}" onblur="syncDriverAssigned('${gk}','${escapeHtmlSafe(row.driver).replace(/'/g,"\\'")}', this.value)"></td>` +
              `<td class="plan-computed">${fmtMoney(assignedDollars)}</td>`;
     }).join('');
-    return `<tr><td>${escapeHtmlSafe(row.driver)}</td><td>${escapeHtmlSafe(row.date)}</td>${cells}<td class="plan-computed">${fmtMoney(rowTotal)}</td><td><span class="remove-driver-icon" title="Delete ${escapeHtmlSafe(row.driver)}'s whole row" onclick="deleteDriverDayRow('${escapeHtmlSafe(row.driver).replace(/'/g,"\\'")}','${row.date}')">🗑️</span></td></tr>`;
+    const rowOff = timeOffFor(row.driver, row.date);
+    const nameCell = rowOff
+      ? `<td style="color:var(--red);">${escapeHtmlSafe(row.driver)}<br><span style="font-size:10px;">🚫 OFF${rowOff.reason ? ' — ' + escapeHtmlSafe(rowOff.reason) : ''}</span></td>`
+      : `<td>${escapeHtmlSafe(row.driver)}</td>`;
+    return `<tr>${nameCell}<td>${escapeHtmlSafe(row.date)}</td>${cells}<td class="plan-computed">${fmtMoney(rowTotal)}</td><td><span class="remove-driver-icon" title="Delete ${escapeHtmlSafe(row.driver)}'s whole row" onclick="deleteDriverDayRow('${escapeHtmlSafe(row.driver).replace(/'/g,"\\'")}','${row.date}')">🗑️</span></td></tr>`;
   }).join('');
 
   // ---- Bottom check row — dispatched vs. the site's own declared order
